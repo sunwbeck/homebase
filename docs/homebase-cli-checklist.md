@@ -25,7 +25,7 @@ This checklist exists so `homebase` CLI work can continue as if one person had b
 - `[~]` canonical resource model exists in code
 - `[x]` agent-first node discovery exists through `homebase client serve` and `homebase node scan`
 - `[x]` 8-digit client-generated pairing gate exists before full profile fetch
-- `[~]` GitHub-based install and rollout workflow is being defined
+- `[~]` GitHub-based install and rollout workflow is partially implemented for the current node
 - `[ ]` persistent client service packaging exists for managed nodes
 - `[ ]` shell completion exists
 - `[ ]` status command exists
@@ -44,9 +44,9 @@ This checklist exists so `homebase` CLI work can continue as if one person had b
 - `[x]` define installable `homebase` entry point
 - `[x]` add base README for the CLI package
 - `[x]` choose and document the CLI framework
-- `[ ]` define GitHub-ref-based install workflow for one node
+- `[x]` define GitHub-ref-based install workflow for one node
 - `[ ]` define GitHub-ref-based rollout workflow from `control`
-- `[ ]` define simple first-install bootstrap path for fresh nodes
+- `[x]` define simple first-install bootstrap path for fresh nodes
 
 ### 2. Resource model
 
@@ -141,8 +141,8 @@ This checklist exists so `homebase` CLI work can continue as if one person had b
 
 - `[~]` document how `homebase client serve` should run persistently on a node
 - `[ ]` add a packaged systemd unit or rendered unit template for Linux nodes
-- `[ ]` add one install command that follows normal Python environment behavior
-- `[ ]` add one upgrade command driven by a GitHub ref or equivalent rollout target
+- `[x]` add one install command that follows normal Python environment behavior
+- `[x]` add one upgrade command driven by a GitHub ref or equivalent rollout target
 - `[ ]` add a control-plane command to show installed `homebase` version or revision across nodes
 - `[ ]` add a control-plane command to roll one GitHub ref to one or more nodes
 - `[ ]` add one local self-test command for discovery and pairing
@@ -196,6 +196,6 @@ Next recommended step:
 
 The next implementation session should begin with:
 
-1. define the GitHub-ref-based install and upgrade grammar for one node
-2. define how `control` records installed `homebase` revision for each node
+1. define how `control` records installed `homebase` revision for each node
+2. add a remote rollout command from `control` to one or more nodes
 3. add node edit/remove commands

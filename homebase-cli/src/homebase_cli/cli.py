@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import sys
-from typing import Callable, Sequence
+from typing import Sequence
 
 import typer
 from rich.progress import BarColumn, Progress, TaskID, SpinnerColumn, TaskProgressColumn, TextColumn
@@ -24,21 +24,14 @@ from homebase_cli.docs_reader import docs_root, get_doc, list_docs
 from homebase_cli.inventory import ansible_ping, write_ansible_inventory
 from homebase_cli.output import print_docs_table, print_node_tree, print_resource_table, print_scan_table
 from homebase_cli.packaging import (
+    DEFAULT_REPO_URL,
+    GitHubVersion,
     PackageOperationError,
-    build_duplicate_wheel,
-    build_wheel,
-    built_wheels,
-    delete_package,
+    github_versions,
     install_command,
-    install_wheel,
-    installable_packages,
-    latest_recovery_wheel,
-    publish_bootstrap,
-    publish_root,
-    project_version,
-    record_package,
-    resolve_dist_dir,
-    resolve_wheel,
+    install_github_ref,
+    latest_github_version,
+    load_install_state,
 )
 from homebase_cli.registry import add_node, child_nodes, load_nodes
 from homebase_cli.resources import all_resources, child_resources, find_resource
@@ -51,7 +44,7 @@ from homebase_cli.scanner import (
     unregistered_discovered_nodes,
 )
 from homebase_cli.selftest import run_client_self_test
-from homebase_cli.settings import add_role, list_roles, load_settings, remove_role, set_package_location, set_role
+from homebase_cli.settings import add_role, list_roles, load_settings, remove_role, set_role
 
 
 app = typer.Typer(no_args_is_help=True, help="Read and inspect the NAS-backed homebase docs.")
@@ -60,21 +53,13 @@ ansible_app = typer.Typer(help="Generate inventory and run small ansible actions
 client_app = typer.Typer(help="Run the homebase client identity endpoint on one node.")
 package_app = typer.Typer(
     invoke_without_command=True,
-    help=(
-        "Manage homebase package location, build wheels, publish first-install artifacts, "
-        "and install updates."
-    )
-)
-package_location_app = typer.Typer(
-    invoke_without_command=True,
-    help="Show or update the stored package directory used by package commands.",
+    help="Inspect GitHub versions and install or upgrade homebase from GitHub refs.",
 )
 dev_app = typer.Typer(help="Run local development validation commands.")
 app.add_typer(node_app, name="node")
 app.add_typer(ansible_app, name="ansible")
 app.add_typer(client_app, name="client")
 app.add_typer(package_app, name="package")
-package_app.add_typer(package_location_app, name="location")
 app.add_typer(dev_app, name="dev")
 console = Console()
 DEFAULT_KIND_CHOICES = ("control", "workstation", "host", "vm", "node")
@@ -113,6 +98,14 @@ def _is_interactive() -> bool:
     return sys.stdin.isatty()
 
 
+def _choose_github_version(repo_url: str, include_prerelease: bool = False) -> GitHubVersion:
+    versions = github_versions(repo_url, include_prerelease=include_prerelease)
+    if not versions:
+        raise typer.BadParameter(f"no GitHub versions found for {repo_url}")
+    selected = _pick_from_list("GitHub versions", [item.label for item in versions])
+    return versions[[item.label for item in versions].index(selected)]
+
+
 def _choose_or_add_role() -> str:
     configured_roles = list(list_roles())
     selected = _pick_from_list("Node role", [*configured_roles, "Add new role"])
@@ -125,14 +118,6 @@ def _choose_or_add_role() -> str:
     return selected
 
 
-@package_location_app.callback()
-def package_location_callback(ctx: typer.Context) -> None:
-    """Show standard help when package location is called without a subcommand."""
-    if ctx.invoked_subcommand is None:
-        console.print(ctx.get_help())
-        raise typer.Exit(code=0)
-
-
 @package_app.callback()
 def package_callback(ctx: typer.Context) -> None:
     """Show standard help when package is called without a subcommand."""
@@ -140,17 +125,6 @@ def package_callback(ctx: typer.Context) -> None:
         return
     console.print(ctx.get_help())
     raise typer.Exit(code=0)
-
-
-def _prompt_package_location(current: str | None) -> str | None:
-    default_value = current or ""
-    prompt_text = "Package location"
-    if current:
-        prompt_text += " (blank to keep current)"
-    response = typer.prompt(prompt_text, default=default_value, show_default=bool(current)).strip()
-    if not response:
-        return current
-    return str(Path(response).expanduser().resolve())
 
 
 def _require_role(*allowed: str) -> None:
@@ -452,24 +426,13 @@ def client_serve_command(
 @app.command("init")
 def init_command(
     role: str | None = typer.Option(None, "--role", help="Optional role to set directly. If omitted, choose from configured roles or add a new one."),
-    package_location: str | None = typer.Option(None, "--package-location", help="Optional shared package directory to store during initialization."),
 ) -> None:
     """Initialize the local node role for this homebase installation."""
-    current = load_settings()
     selected = role.strip().lower() if role is not None else _choose_or_add_role()
     if role is not None and selected not in list_roles():
         add_role(selected)
     updated = set_role(selected)
-    if package_location is not None:
-        resolved_location = str(Path(package_location).expanduser().resolve())
-        updated = set_package_location(resolved_location)
-    elif role is None:
-        chosen_location = _prompt_package_location(current.package_location)
-        if chosen_location != current.package_location:
-            updated = set_package_location(chosen_location)
     console.print(f"[green]Set local role to {updated.role}[/green]")
-    if updated.package_location:
-        console.print(f"[green]Package location:[/green] {updated.package_location}")
 
 
 @app.command("role")
@@ -512,320 +475,76 @@ def roles_command(
         console.print(item)
 
 
-@package_location_app.command("show")
-def package_location_show_command() -> None:
-    """Show the stored package directory."""
-    console.print(resolve_dist_dir())
-
-
-@package_location_app.command("set")
-def package_location_set_command(
-    path: Path = typer.Argument(..., help="Directory to store wheel artifacts."),
+@package_app.command("status")
+def package_status_command(
+    resource: str | None = typer.Argument(None, help="Optional resource path. Remote package status is not implemented yet."),
 ) -> None:
-    """Set the stored package directory."""
-    updated = set_package_location(str(path.resolve()))
-    console.print(f"[green]Package location set to[/green] {updated.package_location}")
+    """Show the currently installed homebase revision on this node."""
+    if resource is not None:
+        raise typer.BadParameter("remote package status is not implemented yet")
+    current = load_install_state()
+    latest: GitHubVersion | None = None
+    latest_error: str | None = None
+    try:
+        latest = latest_github_version(DEFAULT_REPO_URL)
+    except RuntimeError as exc:
+        latest_error = str(exc)
+    console.print("[bold]Current package status[/bold]")
+    console.print(f"installed version: {current.installed_version or 'not installed'}")
+    console.print(f"repo: {current.repo_url or DEFAULT_REPO_URL}")
+    if current.requested_ref:
+        console.print(f"requested ref: {current.requested_ref}")
+    if current.resolved_ref:
+        console.print(f"resolved commit: {current.resolved_ref}")
+    if current.summary:
+        console.print(f"summary: {current.summary}")
+    if current.installed_at:
+        console.print(f"installed at: {current.installed_at}")
+    if latest is not None:
+        console.print(f"latest available: {latest.version}")
+        console.print(f"latest summary: {latest.summary}")
+    elif latest_error is not None:
+        console.print(f"[yellow]latest lookup failed:[/yellow] {latest_error}")
 
 
-@package_location_app.command("clear")
-def package_location_clear_command() -> None:
-    """Clear the stored package directory and fall back to the default local dist directory."""
-    set_package_location(None)
-    console.print(f"[green]Package location cleared[/green]")
-    console.print(resolve_dist_dir())
-
-
-def _build_package_wheel(
-    dist_dir: Path | None = typer.Option(None, "--dist-dir", help="Explicit directory where built wheel files will be written."),
-    message: str = typer.Option("", "--message", help="Short release note stored with the built wheel."),
+@package_app.command("versions")
+def package_versions_command(
+    repo_url: str = typer.Option(DEFAULT_REPO_URL, "--repo", help="GitHub repository URL."),
+    include_prerelease: bool = typer.Option(False, "--pre-release", help="Include prerelease GitHub releases."),
 ) -> None:
-    """Build a wheel for repeated install and upgrade testing on nodes."""
-    resolved_dir = resolve_dist_dir(dist_dir.resolve() if dist_dir is not None else None)
-    version = project_version()
-    same_version_paths = [path for path in built_wheels(resolved_dir) if f"-{version}-" in path.name]
-    build_mode = "normal"
-    console.print(f"[bold]Building version:[/bold] {version}")
-    if same_version_paths:
-        console.print(f"[yellow]Existing wheel with same version:[/yellow] {same_version_paths[0]}")
-        if _is_interactive():
-            selected = _pick_from_list(
-                "Same version wheel already exists",
-                (
-                    "Replace existing wheel (Recommended)",
-                    "Create duplicate wheel with same version",
-                    "Keep existing wheel and skip build",
-                ),
-            )
-            if selected.startswith("Create duplicate"):
-                build_mode = "duplicate"
-            elif selected.startswith("Keep existing"):
-                console.print(f"[yellow]Skipped build.[/yellow] Keeping {same_version_paths[0]}")
-                return
-            else:
-                build_mode = "replace"
-                for existing_path in same_version_paths:
-                    existing_path.unlink(missing_ok=True)
-        else:
-            console.print(
-                "[red]Build blocked.[/red] Same-version wheel already exists. "
-                "Re-run interactively and choose replace/duplicate/keep, or bump the version first."
-            )
-            raise typer.Exit(code=1)
-    else:
-        console.print(f"[green]No existing wheel with version {version} in {resolved_dir}[/green]")
-
-    stage_titles = {
-        "prepare": f"1/5 Prepare output directory: {resolved_dir}",
-        "clean": "2/5 Clean previous build workspace",
-        "select": "3/5 Select Python build backend",
-        "run": "4/5 Build wheel artifact",
-        "record": "5/5 Record build metadata",
-    }
-
-    def run_stage(title: str, work: Callable[[Callable[[], None]], None] | None = None) -> None:
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("{task.description}"),
-            BarColumn(),
-            TaskProgressColumn(),
-            console=console,
-        ) as progress:
-            task_id = progress.add_task(title, total=100)
-            if work is None:
-                progress.update(task_id, completed=100)
-                return
-            tick_value = 0
-
-            def stage_tick() -> None:
-                nonlocal tick_value
-                if tick_value < 92:
-                    tick_value += 1
-                progress.update(task_id, completed=tick_value)
-
-            work(stage_tick)
-            progress.update(task_id, completed=100)
-
-    run_stage(stage_titles["prepare"])
-    run_stage(stage_titles["clean"])
-    run_stage(stage_titles["select"])
-
-    wheel_path: Path | None = None
-
-    def build_stage(on_tick: callable) -> None:
-        nonlocal wheel_path
-        try:
-            if build_mode == "duplicate":
-                wheel_path = build_duplicate_wheel(resolved_dir, on_tick=on_tick)
-            else:
-                wheel_path = build_wheel(resolved_dir, on_stage=None, on_tick=on_tick)
-        except PackageOperationError as exc:
-            console.print(f"[red]Package build failed.[/red] Log: {exc.log_path}")
-            console.print(f"Check the log with: `less {exc.log_path}`")
-            raise typer.Exit(code=1)
-
-    run_stage(stage_titles["run"], build_stage)
-
-    final_message = message
-    if not final_message and _is_interactive():
-        final_message = typer.prompt("Build message (optional)", default="", show_default=False).strip()
-
-    def record_stage(_: callable) -> None:
-        assert wheel_path is not None
-        record_package(wheel_path, message=final_message)
-
-    run_stage(stage_titles["record"], record_stage)
-    assert wheel_path is not None
-    console.print(f"[green]Built package:[/green] {wheel_path}")
-    console.print(f"[green]Built version:[/green] {version}")
-
-
-@package_app.command("build")
-def package_build_command(
-    dist_dir: Path | None = typer.Option(None, "--dist-dir", help="Explicit directory where built wheel files will be written."),
-    message: str = typer.Option("", "--message", help="Short release note stored with the built wheel."),
-) -> None:
-    """Build a wheel package for install and recovery."""
-    _build_package_wheel(dist_dir=dist_dir, message=message)
-
-
-@package_app.command("wheel", hidden=True)
-def package_wheel_command(
-    dist_dir: Path | None = typer.Option(None, "--dist-dir", help="Explicit directory where built wheel files will be written."),
-    message: str = typer.Option("", "--message", help="Short release note stored with the built wheel."),
-) -> None:
-    """Backward-compatible alias for `hb package build`."""
-    _build_package_wheel(dist_dir=dist_dir, message=message)
-
-
-@package_app.command("publish")
-def package_publish_command(
-    dist_dir: Path | None = typer.Option(None, "--dist-dir", help="Explicit package directory whose parent will receive published bootstrap artifacts."),
-) -> None:
-    """Publish bootstrap artifacts for first-install on fresh nodes."""
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("{task.description}"),
-        BarColumn(),
-        TaskProgressColumn(),
-        console=console,
-    ) as progress:
-        resolved_dir = resolve_dist_dir(dist_dir.resolve() if dist_dir is not None else None)
-        task = progress.add_task(f"1/3 Check package directory: {resolved_dir}", total=100)
-        progress.update(task, completed=100)
-        if not built_wheels(resolved_dir):
-            task = progress.add_task("2/3 Build base package for publish", total=100)
-            try:
-                tick_value = 0
-
-                def publish_tick() -> None:
-                    nonlocal tick_value
-                    if tick_value < 92:
-                        tick_value += 1
-                    progress.update(task, completed=tick_value)
-
-                base_wheel = build_wheel(resolved_dir, on_tick=publish_tick)
-                progress.update(task, completed=100)
-                record_task = progress.add_task("3/3 Record published build metadata", total=100)
-                record_package(base_wheel, message="publish bootstrap base package")
-                progress.update(record_task, completed=100)
-            except PackageOperationError as exc:
-                progress.stop()
-                console.print(f"[red]Package publish failed during build.[/red] Log: {exc.log_path}")
-                console.print(f"Check the log with: `less {exc.log_path}`")
-                raise typer.Exit(code=1)
-        else:
-            task = progress.add_task("2/3 Use existing built package", total=100)
-            progress.update(task, completed=100)
-        task = progress.add_task("3/3 Publish bootstrap artifacts", total=100)
-        try:
-            tick_value = 0
-
-            def publish_artifact_tick() -> None:
-                nonlocal tick_value
-                if tick_value < 92:
-                    tick_value += 1
-                progress.update(task, completed=tick_value)
-
-            script_path, bundle_path = publish_bootstrap(resolved_dir, on_tick=publish_artifact_tick)
-        except Exception as exc:
-            progress.stop()
-            console.print(f"[red]Package publish failed.[/red] {exc}")
-            raise typer.Exit(code=1)
-        progress.update(task, completed=100)
-    console.print(f"[green]Published bootstrap script:[/green] {script_path}")
-    console.print(f"[green]Published source bundle:[/green] {bundle_path}")
-    console.print(f"[green]Publish root:[/green] {publish_root(resolved_dir)}")
-    console.print("[green]Fresh-node install command:[/green]")
-    console.print(f"bash {script_path}")
-    console.print("[green]Optional examples:[/green]")
-    console.print(f"bash {script_path} --wheel-dir {resolved_dir}")
-    console.print(f"bash {script_path} --package-location {resolved_dir}")
-    console.print(f"bash {script_path} --role client")
-
-
-@package_app.command("list")
-def package_list_command(
-    dist_dir: Path | None = typer.Option(None, "--dist-dir", help="Explicit directory to search when no wheel path is given."),
-) -> None:
-    """List installable wheel artifacts in the configured package directory."""
-    resolved_dir = resolve_dist_dir(dist_dir.resolve() if dist_dir is not None else None)
-    packages = installable_packages(resolved_dir)
-    if not packages:
-        console.print(f"[yellow]No wheels found in {resolved_dir}[/yellow]")
+    """List installable GitHub versions with short release notes."""
+    try:
+        versions = github_versions(repo_url, include_prerelease=include_prerelease)
+    except RuntimeError as exc:
+        console.print(f"[red]Version lookup failed.[/red] {exc}")
+        raise typer.Exit(code=1)
+    if not versions:
+        console.print(f"[yellow]No GitHub versions found for {repo_url}[/yellow]")
         return
-    console.print(f"[bold]Package directory:[/bold] {resolved_dir}")
     table = Table(show_header=True, header_style="bold")
     table.add_column("#", justify="right")
     table.add_column("Version")
-    table.add_column("Wheel File")
-    table.add_column("Message")
-    table.add_column("Created")
-    for index, item in enumerate(packages, start=1):
+    table.add_column("Type")
+    table.add_column("Published")
+    table.add_column("Summary")
+    for index, item in enumerate(versions, start=1):
         table.add_row(
             str(index),
             item.version,
-            item.filename,
-            item.message or "",
-            item.created_at,
+            item.source,
+            item.published_at or "",
+            item.summary,
         )
     console.print(table)
 
 
-def _choose_package_wheel(dist_dir: Path | None = None) -> Path:
-    packages = installable_packages(dist_dir)
-    if not packages:
-        raise typer.BadParameter(f"no wheels found in {resolve_dist_dir(dist_dir)}")
-    labels = [item.label for item in packages]
-    selected = _pick_from_list("Installable wheels", labels)
-    chosen = packages[labels.index(selected)]
-    return resolve_wheel(dist_dir, chosen.filename)
-
-
-def _choose_package_record(dist_dir: Path | None = None) -> PackageRecord:
-    packages = installable_packages(dist_dir)
-    if not packages:
-        raise typer.BadParameter(f"no wheels found in {resolve_dist_dir(dist_dir)}")
-    labels = [item.label for item in packages]
-    selected = _pick_from_list("Installable wheels", labels)
-    return packages[labels.index(selected)]
-
-
-@package_app.command("install-command")
-def package_install_command_command(
-    wheel: str | None = typer.Option(None, "--wheel", help="Wheel filename in the package directory or an explicit wheel path."),
-    dist_dir: Path | None = typer.Option(None, "--dist-dir", help="Explicit directory to search when no wheel path is given."),
-    python_bin: str = typer.Option("python3", "--python", help="Python executable to use on the target node."),
+def _run_install_flow(
+    *,
+    ref: str,
+    repo_url: str,
+    python_bin: str | None,
+    summary: str | None,
 ) -> None:
-    """Print the install command for one built wheel."""
-    resolved_dir = resolve_dist_dir(dist_dir.resolve() if dist_dir is not None else None)
-    try:
-        resolved_wheel = resolve_wheel(resolved_dir, wheel)
-    except ValueError as exc:
-        console.print(f"[red]No installable package found.[/red] {exc}")
-        console.print(f"Try `hb package build` or `hb package publish` first.")
-        raise typer.Exit(code=1)
-    console.print(install_command(resolved_wheel, python_bin=python_bin))
-    if wheel is None and not built_wheels(resolved_dir):
-        recovery = latest_recovery_wheel()
-        if recovery is not None:
-            console.print(f"[yellow]Using locally preserved recovery wheel:[/yellow] {recovery}")
-
-
-@package_app.command("delete")
-def package_delete_command(
-    wheel: str | None = typer.Option(None, "--wheel", help="Wheel filename in the package directory or an explicit wheel path."),
-    dist_dir: Path | None = typer.Option(None, "--dist-dir", help="Explicit directory to search when no wheel path is given."),
-) -> None:
-    """Delete one built wheel from the package directory and remove it from the package list."""
-    resolved_dir = resolve_dist_dir(dist_dir.resolve() if dist_dir is not None else None)
-    try:
-        if wheel is not None:
-            wheel_path = resolve_wheel(resolved_dir, wheel)
-        else:
-            chosen = _choose_package_record(resolved_dir)
-            wheel_path = resolve_wheel(resolved_dir, chosen.filename)
-    except ValueError as exc:
-        console.print(f"[red]Package delete failed.[/red] {exc}")
-        raise typer.Exit(code=1)
-
-    delete_package(wheel_path, resolved_dir)
-    console.print(f"[green]Deleted package:[/green] {wheel_path}")
-
-
-@package_app.command("install")
-def package_install_package_command(
-    wheel: str | None = typer.Option(None, "--wheel", help="Wheel filename in the package directory or an explicit wheel path."),
-    dist_dir: Path | None = typer.Option(None, "--dist-dir", help="Explicit directory to search when no wheel path is given."),
-    python_bin: str | None = typer.Option(None, "--python", help="Explicit Python executable to install into. Defaults to the current Python environment."),
-) -> None:
-    """Install or upgrade homebase from one built wheel."""
-    resolved_dir = resolve_dist_dir(dist_dir.resolve() if dist_dir is not None else None)
-    try:
-        resolved_wheel = resolve_wheel(resolved_dir, wheel) if wheel is not None else _choose_package_wheel(resolved_dir)
-    except ValueError as exc:
-        console.print(f"[red]Package install failed.[/red] {exc}")
-        raise typer.Exit(code=1)
-
     with Progress(
         SpinnerColumn(),
         TextColumn("{task.description}"),
@@ -833,27 +552,99 @@ def package_install_package_command(
         TaskProgressColumn(),
         console=console,
     ) as progress:
-        task = progress.add_task("1/2 Resolve package to install", total=100)
+        task = progress.add_task(f"1/3 Resolve GitHub target: {ref}", total=100)
         progress.update(task, completed=100)
-        task = progress.add_task(f"2/2 Install {resolved_wheel.name}", total=100)
-        current_tick = 0
+        task = progress.add_task(f"2/3 Install from GitHub ref: {ref}", total=100)
+        tick_value = 0
 
         def install_tick() -> None:
-            nonlocal current_tick
-            if current_tick < 92:
-                current_tick += 1
-            progress.update(task, completed=current_tick)
+            nonlocal tick_value
+            if tick_value < 92:
+                tick_value += 1
+            progress.update(task, completed=tick_value)
 
-        result = install_wheel(resolved_wheel, python_bin=python_bin, on_tick=install_tick)
-        if result.returncode != 0:
+        try:
+            _, status = install_github_ref(
+                ref,
+                repo_url=repo_url,
+                python_bin=python_bin,
+                summary=summary,
+                on_tick=install_tick,
+            )
+        except PackageOperationError as exc:
             progress.stop()
-            console.print(f"[red]Package install failed.[/red] Log: {result.log_path}")
-            console.print(f"Check the log with: `less {result.log_path}`")
+            console.print(f"[red]Package install failed.[/red] Log: {exc.log_path}")
+            console.print(f"Check the log with: `less {exc.log_path}`")
             raise typer.Exit(code=1)
         progress.update(task, completed=100)
-    console.print(f"[green]Installed wheel:[/green] {resolved_wheel}")
+        task = progress.add_task("3/3 Record installed revision", total=100)
+        progress.update(task, completed=100)
+    console.print(f"[green]Installed version:[/green] {status.installed_version or 'unknown'}")
+    console.print(f"[green]Requested ref:[/green] {status.requested_ref}")
+    if status.resolved_ref:
+        console.print(f"[green]Resolved commit:[/green] {status.resolved_ref}")
     if python_bin is not None:
         console.print(f"[green]Installed into Python:[/green] {python_bin}")
+
+
+@package_app.command("install")
+def package_install_command(
+    resource: str | None = typer.Argument(None, help="Optional resource path. Remote install is not implemented yet."),
+    ref: str | None = typer.Option(None, "--ref", help="GitHub ref to install: branch, tag, release tag, or commit SHA."),
+    repo_url: str = typer.Option(DEFAULT_REPO_URL, "--repo", help="GitHub repository URL."),
+    python_bin: str | None = typer.Option(None, "--python", help="Explicit Python executable to install into. Defaults to the current Python environment."),
+    include_prerelease: bool = typer.Option(False, "--pre-release", help="Include prerelease GitHub releases when choosing interactively."),
+) -> None:
+    """Install one GitHub ref, or choose a version interactively."""
+    if resource is not None:
+        raise typer.BadParameter("remote package install is not implemented yet")
+    selected_summary: str | None = None
+    selected_ref = ref
+    if selected_ref is None:
+        try:
+            chosen = _choose_github_version(repo_url, include_prerelease=include_prerelease)
+        except RuntimeError as exc:
+            console.print(f"[red]Version lookup failed.[/red] {exc}")
+            raise typer.Exit(code=1)
+        selected_ref = chosen.ref
+        selected_summary = chosen.summary
+    _run_install_flow(ref=selected_ref, repo_url=repo_url, python_bin=python_bin, summary=selected_summary)
+
+
+@package_app.command("upgrade")
+def package_upgrade_command(
+    resource: str | None = typer.Argument(None, help="Optional resource path. Remote upgrade is not implemented yet."),
+    repo_url: str = typer.Option(DEFAULT_REPO_URL, "--repo", help="GitHub repository URL."),
+    python_bin: str | None = typer.Option(None, "--python", help="Explicit Python executable to install into. Defaults to the current Python environment."),
+    include_prerelease: bool = typer.Option(False, "--pre-release", help="Allow prerelease versions when selecting the latest target."),
+) -> None:
+    """Upgrade to the latest GitHub release, or default branch when no release exists."""
+    if resource is not None:
+        raise typer.BadParameter("remote package upgrade is not implemented yet")
+    try:
+        latest = latest_github_version(repo_url, include_prerelease=include_prerelease)
+    except RuntimeError as exc:
+        console.print(f"[red]Latest-version lookup failed.[/red] {exc}")
+        raise typer.Exit(code=1)
+    console.print(f"[bold]Selected latest target:[/bold] {latest.version}")
+    console.print(f"summary: {latest.summary}")
+    _run_install_flow(ref=latest.ref, repo_url=repo_url, python_bin=python_bin, summary=latest.summary)
+
+
+@package_app.command("update")
+def package_update_command(
+    resource: str | None = typer.Argument(None, help="Optional resource path. Remote update is not implemented yet."),
+    repo_url: str = typer.Option(DEFAULT_REPO_URL, "--repo", help="GitHub repository URL."),
+    python_bin: str | None = typer.Option(None, "--python", help="Explicit Python executable to install into. Defaults to the current Python environment."),
+    include_prerelease: bool = typer.Option(False, "--pre-release", help="Allow prerelease versions when selecting the latest target."),
+) -> None:
+    """Alias for `hb package upgrade`."""
+    package_upgrade_command(
+        resource=resource,
+        repo_url=repo_url,
+        python_bin=python_bin,
+        include_prerelease=include_prerelease,
+    )
 
 
 @dev_app.command("self-test")

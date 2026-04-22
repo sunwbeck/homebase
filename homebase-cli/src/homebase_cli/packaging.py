@@ -1,33 +1,29 @@
-"""Helpers for building and installing versioned homebase package artifacts."""
+"""Helpers for GitHub-based homebase install, upgrade, and version inspection."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+import importlib.metadata
 import json
+import re
 import shlex
-import shutil
 import subprocess
 import sys
-import tarfile
-import tempfile
 import time
-import tomllib
-from typing import Callable
+from typing import Any, Callable
+from urllib.error import HTTPError, URLError
+from urllib.parse import quote
+from urllib.request import Request, urlopen
 
-from homebase_cli.paths import LOCAL_CLI_ROOT
-from homebase_cli.settings import load_settings
 
-
-DEFAULT_DIST_DIR = LOCAL_CLI_ROOT / "dist"
-PACKAGE_INDEX_FILENAME = "packages.json"
-BOOTSTRAP_DIRNAME = "bootstrap"
-BOOTSTRAP_SCRIPT_NAME = "bootstrap-homebase.sh"
-SOURCE_BUNDLE_NAME = "homebase-cli-source.tar.gz"
-RECOVERY_DIR = Path.home() / ".local" / "share" / "homebase-cli" / "recovery"
+DEFAULT_REPO_URL = "https://github.com/sunwbeck/homebase.git"
+DEFAULT_SUBDIRECTORY = "homebase-cli"
+INSTALL_STATE_PATH = Path.home() / ".local" / "share" / "homebase-cli" / "install-state.json"
 LOG_DIR = Path.home() / ".local" / "share" / "homebase-cli" / "logs"
-EXCLUDED_BUNDLE_NAMES = {".git", ".venv", "dist", "build", "__pycache__", ".pytest_cache", ".mypy_cache"}
+PACKAGE_NAME = "homebase-cli"
+GITHUB_API_ROOT = "https://api.github.com"
 
 
 class PackageOperationError(RuntimeError):
@@ -49,26 +45,33 @@ class LoggedResult:
 
 
 @dataclass(frozen=True)
-class PackageRecord:
-    """Metadata about one built wheel artifact."""
+class GitHubVersion:
+    """One installable GitHub version candidate."""
 
-    filename: str
     version: str
-    message: str
-    created_at: str
+    ref: str
+    summary: str
+    published_at: str
+    prerelease: bool
+    source: str
+    url: str
 
     @property
     def label(self) -> str:
-        """Return a concise display label for interactive selection."""
-        note = self.message if self.message else "no message"
-        return f"{self.version} | {self.filename} | {note}"
+        note = self.summary if self.summary else "no description"
+        return f"{self.version} | {note}"
 
 
-def project_version() -> str:
-    """Read the current package version from pyproject.toml."""
-    pyproject = LOCAL_CLI_ROOT / "pyproject.toml"
-    payload = tomllib.loads(pyproject.read_text(encoding="utf-8"))
-    return str(payload["project"]["version"])
+@dataclass(frozen=True)
+class InstalledPackageStatus:
+    """Current locally installed homebase package status."""
+
+    installed_version: str | None
+    repo_url: str | None
+    requested_ref: str | None
+    resolved_ref: str | None
+    summary: str | None
+    installed_at: str | None
 
 
 def _new_log_path(prefix: str) -> Path:
@@ -83,34 +86,6 @@ def _write_log(path: Path, content: str) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
     return path
-
-
-def _python_candidates() -> tuple[str, ...]:
-    """Return likely Python interpreters to try for package building."""
-    candidates: list[str] = []
-    for item in (
-        sys.executable,
-        getattr(sys, "_base_executable", None),
-        shutil.which("python3"),
-        "/usr/bin/python3",
-    ):
-        if not item:
-            continue
-        normalized = str(item)
-        if normalized not in candidates:
-            candidates.append(normalized)
-    return tuple(candidates)
-
-
-def _supports_build_backend(python_bin: str) -> bool:
-    """Return True when the interpreter can import setuptools.build_meta."""
-    probe = subprocess.run(
-        [python_bin, "-c", "import setuptools.build_meta"],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    return probe.returncode == 0
 
 
 def _run_logged(
@@ -154,317 +129,240 @@ def _run_logged(
     )
 
 
-def resolve_dist_dir(dist_dir: Path | None = None) -> Path:
-    """Resolve the directory used for wheel artifacts."""
-    if dist_dir is not None:
-        return dist_dir
-    settings = load_settings()
-    if settings.package_location:
-        return Path(settings.package_location)
-    return DEFAULT_DIST_DIR
+def _normalize_repo_url(repo_url: str) -> str:
+    """Return the canonical repo URL used for git install."""
+    normalized = repo_url.strip()
+    if not normalized:
+        raise ValueError("repo URL cannot be empty")
+    return normalized
 
 
-def package_index_path(dist_dir: Path | None = None) -> Path:
-    """Return the metadata index path for one package directory."""
-    return resolve_dist_dir(dist_dir) / PACKAGE_INDEX_FILENAME
+def github_repo_slug(repo_url: str) -> str:
+    """Parse one GitHub repo URL into owner/repo form."""
+    normalized = _normalize_repo_url(repo_url)
+    patterns = (
+        r"^https://github\.com/(?P<owner>[^/]+)/(?P<repo>[^/]+?)(?:\.git)?/?$",
+        r"^git@github\.com:(?P<owner>[^/]+)/(?P<repo>[^/]+?)(?:\.git)?$",
+    )
+    for pattern in patterns:
+        match = re.match(pattern, normalized)
+        if match:
+            return f"{match.group('owner')}/{match.group('repo')}"
+    raise ValueError(f"unsupported GitHub repo URL: {repo_url}")
 
 
-def load_package_index(dist_dir: Path | None = None) -> tuple[PackageRecord, ...]:
-    """Load the package metadata index for one directory."""
-    path = package_index_path(dist_dir)
-    if not path.exists():
-        return ()
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    records = [
-        PackageRecord(
-            filename=str(item["filename"]),
-            version=str(item["version"]),
-            message=str(item.get("message", "")),
-            created_at=str(item["created_at"]),
+def github_install_target(repo_url: str, ref: str, subdirectory: str = DEFAULT_SUBDIRECTORY) -> str:
+    """Return the pip install target for one GitHub ref."""
+    normalized_repo = _normalize_repo_url(repo_url)
+    normalized_ref = ref.strip()
+    if not normalized_ref:
+        raise ValueError("git ref cannot be empty")
+    return f"git+{normalized_repo}@{normalized_ref}#subdirectory={subdirectory}"
+
+
+def install_command(repo_url: str, ref: str, python_bin: str = "python3") -> str:
+    """Render a shell command that installs or upgrades one GitHub ref."""
+    target = github_install_target(repo_url, ref)
+    return f"{shlex.quote(python_bin)} -m pip install --upgrade {shlex.quote(target)}"
+
+
+def _fetch_json(url: str) -> Any:
+    """Fetch one JSON payload from GitHub."""
+    request = Request(
+        url,
+        headers={
+            "Accept": "application/vnd.github+json",
+            "User-Agent": "homebase-cli",
+        },
+    )
+    try:
+        with urlopen(request, timeout=20) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except HTTPError as exc:
+        raise RuntimeError(f"GitHub API request failed with HTTP {exc.code} for {url}") from exc
+    except URLError as exc:
+        raise RuntimeError(f"GitHub API request failed for {url}: {exc.reason}") from exc
+
+
+def _github_api_url(repo_url: str, suffix: str) -> str:
+    slug = github_repo_slug(repo_url)
+    return f"{GITHUB_API_ROOT}/repos/{slug}{suffix}"
+
+
+def _summarize_body(body: str | None) -> str:
+    """Return one short one-line summary from release notes."""
+    if body is None:
+        return ""
+    for line in body.splitlines():
+        normalized = line.strip().lstrip("-*# ").strip()
+        if normalized:
+            return normalized[:120]
+    return ""
+
+
+def github_versions(
+    repo_url: str = DEFAULT_REPO_URL,
+    *,
+    include_prerelease: bool = False,
+    limit: int = 20,
+) -> tuple[GitHubVersion, ...]:
+    """Return visible versions from GitHub releases, or tags when releases do not exist."""
+    releases_payload = _fetch_json(_github_api_url(repo_url, f"/releases?per_page={max(limit, 1)}"))
+    releases: list[GitHubVersion] = []
+    for item in releases_payload:
+        if item.get("draft"):
+            continue
+        if item.get("prerelease") and not include_prerelease:
+            continue
+        releases.append(
+            GitHubVersion(
+                version=str(item.get("tag_name") or item.get("name") or "unknown"),
+                ref=str(item.get("tag_name") or item.get("name") or "unknown"),
+                summary=_summarize_body(item.get("body")) or "no release notes",
+                published_at=str(item.get("published_at") or ""),
+                prerelease=bool(item.get("prerelease")),
+                source="release",
+                url=str(item.get("html_url") or ""),
+            )
         )
-        for item in payload
-    ]
-    return tuple(records)
+    if releases:
+        return tuple(releases[:limit])
+
+    tags_payload = _fetch_json(_github_api_url(repo_url, f"/tags?per_page={max(limit, 1)}"))
+    tags: list[GitHubVersion] = []
+    for item in tags_payload:
+        name = str(item.get("name") or "")
+        if not name:
+            continue
+        tags.append(
+            GitHubVersion(
+                version=name,
+                ref=name,
+                summary="tag without release notes",
+                published_at="",
+                prerelease=False,
+                source="tag",
+                url=f"https://github.com/{github_repo_slug(repo_url)}/tree/{quote(name, safe='')}",
+            )
+        )
+    return tuple(tags[:limit])
 
 
-def save_package_index(records: tuple[PackageRecord, ...], dist_dir: Path | None = None) -> Path:
-    """Persist the package metadata index."""
-    path = package_index_path(dist_dir)
+def latest_github_version(repo_url: str = DEFAULT_REPO_URL, *, include_prerelease: bool = False) -> GitHubVersion:
+    """Return the preferred latest install target from GitHub."""
+    versions = github_versions(repo_url, include_prerelease=include_prerelease, limit=20)
+    if versions:
+        return versions[0]
+    repo_payload = _fetch_json(_github_api_url(repo_url, ""))
+    default_branch = str(repo_payload.get("default_branch") or "main")
+    return GitHubVersion(
+        version=default_branch,
+        ref=default_branch,
+        summary="default branch",
+        published_at="",
+        prerelease=False,
+        source="branch",
+        url=f"https://github.com/{github_repo_slug(repo_url)}/tree/{quote(default_branch, safe='')}",
+    )
+
+
+def resolve_github_ref(repo_url: str, ref: str) -> str:
+    """Resolve one GitHub ref to a commit SHA."""
+    payload = _fetch_json(_github_api_url(repo_url, f"/commits/{quote(ref, safe='')}"))
+    return str(payload.get("sha") or ref)
+
+
+def installed_version(python_bin: str | None = None) -> str | None:
+    """Return the installed homebase version for one interpreter."""
+    if python_bin is None:
+        try:
+            return importlib.metadata.version(PACKAGE_NAME)
+        except importlib.metadata.PackageNotFoundError:
+            return None
+    result = subprocess.run(
+        [
+            python_bin,
+            "-c",
+            (
+                "import importlib.metadata as m; "
+                "import sys; "
+                "try: print(m.version('homebase-cli')); "
+                "except m.PackageNotFoundError: sys.exit(1)"
+            ),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip() or None
+
+
+def load_install_state(path: Path = INSTALL_STATE_PATH) -> InstalledPackageStatus:
+    """Load the stored local install state."""
+    version = installed_version()
+    if not path.exists():
+        return InstalledPackageStatus(
+            installed_version=version,
+            repo_url=None,
+            requested_ref=None,
+            resolved_ref=None,
+            summary=None,
+            installed_at=None,
+        )
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    return InstalledPackageStatus(
+        installed_version=version,
+        repo_url=str(payload.get("repo_url") or "") or None,
+        requested_ref=str(payload.get("requested_ref") or "") or None,
+        resolved_ref=str(payload.get("resolved_ref") or "") or None,
+        summary=str(payload.get("summary") or "") or None,
+        installed_at=str(payload.get("installed_at") or "") or None,
+    )
+
+
+def save_install_state(status: InstalledPackageStatus, path: Path = INSTALL_STATE_PATH) -> Path:
+    """Persist the local install state."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    payload = [
-        {
-            "filename": item.filename,
-            "version": item.version,
-            "message": item.message,
-            "created_at": item.created_at,
-        }
-        for item in records
-    ]
+    payload = {
+        "installed_version": status.installed_version,
+        "repo_url": status.repo_url,
+        "requested_ref": status.requested_ref,
+        "resolved_ref": status.resolved_ref,
+        "summary": status.summary,
+        "installed_at": status.installed_at,
+    }
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return path
 
 
-def remove_package_record(filename: str, dist_dir: Path | None = None) -> Path:
-    """Remove one wheel entry from the package index."""
-    target = resolve_dist_dir(dist_dir)
-    remaining = tuple(item for item in load_package_index(target) if item.filename != filename)
-    return save_package_index(remaining, target)
-
-
-def record_package(wheel_path: Path, message: str = "") -> PackageRecord:
-    """Record one built wheel in the package index."""
-    target_dir = wheel_path.parent
-    record = PackageRecord(
-        filename=wheel_path.name,
-        version=project_version(),
-        message=message.strip(),
-        created_at=datetime.now(UTC).isoformat(),
-    )
-    current = [item for item in load_package_index(target_dir) if item.filename != record.filename]
-    current.append(record)
-    current.sort(key=lambda item: item.created_at, reverse=True)
-    save_package_index(tuple(current), target_dir)
-    return record
-
-
-def duplicate_wheel_path(wheel_path: Path, dist_dir: Path | None = None) -> Path:
-    """Return a unique duplicate wheel path in the target directory."""
-    target_dir = resolve_dist_dir(dist_dir)
-    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-    return target_dir / f"{wheel_path.stem}-{stamp}{wheel_path.suffix}"
-
-
-def built_wheels(dist_dir: Path | None = None) -> tuple[Path, ...]:
-    """Return wheels present in one package directory, newest first."""
-    target = resolve_dist_dir(dist_dir)
-    return tuple(sorted(target.glob("*.whl"), key=lambda item: item.stat().st_mtime, reverse=True))
-
-
-def installable_packages(dist_dir: Path | None = None) -> tuple[PackageRecord, ...]:
-    """Return indexed packages that still exist on disk."""
-    target = resolve_dist_dir(dist_dir)
-    existing = {path.name for path in built_wheels(target)}
-    indexed = [item for item in load_package_index(target) if item.filename in existing]
-    if indexed:
-        return tuple(indexed)
-    fallback: list[PackageRecord] = []
-    for wheel_path in built_wheels(target):
-        fallback.append(
-            PackageRecord(
-                filename=wheel_path.name,
-                version="unknown",
-                message="",
-                created_at=datetime.fromtimestamp(wheel_path.stat().st_mtime, UTC).isoformat(),
-            )
-        )
-    return tuple(fallback)
-
-
-def resolve_wheel(dist_dir: Path | None = None, wheel_name: str | None = None) -> Path:
-    """Resolve one installable wheel by name or newest artifact."""
-    target = resolve_dist_dir(dist_dir)
-    if wheel_name:
-        candidate = target / wheel_name
-        if candidate.exists():
-            return candidate
-        candidate = Path(wheel_name)
-        if candidate.exists():
-            return candidate.resolve()
-        raise ValueError(f"wheel not found: {wheel_name}")
-    wheels = built_wheels(target)
-    if not wheels:
-        recovery_wheel = latest_recovery_wheel()
-        if recovery_wheel is not None:
-            return recovery_wheel
-        raise ValueError(f"no wheels found in {target}")
-    return wheels[0]
-
-
-def build_wheel(
-    dist_dir: Path | None = None,
+def install_github_ref(
+    ref: str,
     *,
-    on_stage: Callable[[str], None] | None = None,
-    on_tick: Callable[[], None] | None = None,
-) -> Path:
-    """Build one wheel into the target directory."""
-    target = resolve_dist_dir(dist_dir)
-    if on_stage is not None:
-        on_stage(f"Preparing output directory {target}")
-    target.mkdir(parents=True, exist_ok=True)
-    if on_stage is not None:
-        on_stage("Cleaning previous build workspace")
-    shutil.rmtree(LOCAL_CLI_ROOT / "build", ignore_errors=True)
-    before = {path.name for path in target.glob("*.whl")}
-    attempts: list[str] = []
-    if on_stage is not None:
-        on_stage("Selecting Python build backend")
-    for python_bin in _python_candidates():
-        if not _supports_build_backend(python_bin):
-            attempts.append(f"{python_bin}: missing setuptools.build_meta")
-            continue
-        if on_stage is not None:
-            on_stage(f"Running pip wheel with {python_bin}")
-        result = _run_logged(
-            [
-                python_bin,
-                "-m",
-                "pip",
-                "wheel",
-                "--no-deps",
-                "--no-build-isolation",
-                "--wheel-dir",
-                str(target),
-                ".",
-            ],
-            cwd=LOCAL_CLI_ROOT,
-            log_prefix="package-build",
-            on_tick=on_tick,
-        )
-        if result.returncode == 0:
-            break
-        attempts.append(f"{python_bin}: failed, see {result.log_path}")
-    else:
-        log_path = _new_log_path("package-build-failure")
-        _write_log(log_path, "\n".join(attempts) or "wheel build failed")
-        raise PackageOperationError("build failed", log_path)
-
-    after = sorted(target.glob("*.whl"), key=lambda item: item.stat().st_mtime)
-    new_paths = [path for path in after if path.name not in before]
-    if new_paths:
-        wheel_path = new_paths[-1]
-    elif after:
-        wheel_path = after[-1]
-    else:
-        raise RuntimeError("wheel build completed but no wheel was found")
-    return wheel_path
-
-
-def build_duplicate_wheel(
-    dist_dir: Path | None = None,
-    *,
-    on_tick: Callable[[], None] | None = None,
-) -> Path:
-    """Build one wheel and store it with a unique duplicate filename."""
-    target = resolve_dist_dir(dist_dir)
-    target.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix="homebase-wheel-build-") as tmp_dir_name:
-        tmp_dir = Path(tmp_dir_name)
-        wheel_path = build_wheel(tmp_dir, on_tick=on_tick)
-        duplicate_path = duplicate_wheel_path(wheel_path, target)
-        shutil.move(str(wheel_path), duplicate_path)
-    return duplicate_path
-
-
-def install_command(wheel_path: Path, python_bin: str = "python3") -> str:
-    """Render a shell command that installs or upgrades one built wheel."""
-    return f"{shlex.quote(python_bin)} -m pip install --upgrade {shlex.quote(str(wheel_path))}"
-
-
-def install_wheel(
-    wheel_path: Path,
+    repo_url: str = DEFAULT_REPO_URL,
     python_bin: str | None = None,
-    *,
+    summary: str | None = None,
     on_tick: Callable[[], None] | None = None,
-) -> LoggedResult:
-    """Install or upgrade the current Python environment from one wheel."""
+) -> tuple[LoggedResult, InstalledPackageStatus]:
+    """Install or upgrade from one GitHub ref and persist local install state."""
     interpreter = python_bin if python_bin is not None else sys.executable
+    target = github_install_target(repo_url, ref)
     result = _run_logged(
-        [interpreter, "-m", "pip", "install", "--upgrade", str(wheel_path)],
-        cwd=LOCAL_CLI_ROOT,
+        [interpreter, "-m", "pip", "install", "--upgrade", target],
+        cwd=Path.cwd(),
         log_prefix="package-install",
         on_tick=on_tick,
     )
-    if result.returncode == 0:
-        preserve_recovery_wheel(wheel_path)
-    return result
-
-
-def publish_root(dist_dir: Path | None = None) -> Path:
-    """Return the shared publish root derived from the package directory."""
-    return resolve_dist_dir(dist_dir).parent
-
-
-def bootstrap_publish_dir(dist_dir: Path | None = None) -> Path:
-    """Return the directory where bootstrap artifacts are published."""
-    return publish_root(dist_dir) / BOOTSTRAP_DIRNAME
-
-
-def source_bundle_path(dist_dir: Path | None = None) -> Path:
-    """Return the source bundle path in the publish directory."""
-    return bootstrap_publish_dir(dist_dir) / SOURCE_BUNDLE_NAME
-
-
-def bootstrap_script_path(dist_dir: Path | None = None) -> Path:
-    """Return the published bootstrap script path."""
-    return bootstrap_publish_dir(dist_dir) / BOOTSTRAP_SCRIPT_NAME
-
-
-def create_source_bundle(
-    dist_dir: Path | None = None,
-    *,
-    on_tick: Callable[[], None] | None = None,
-) -> Path:
-    """Create a tar.gz source bundle for bootstrap installation."""
-    target = source_bundle_path(dist_dir)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    paths = [LOCAL_CLI_ROOT]
-    for path in sorted(LOCAL_CLI_ROOT.rglob("*")):
-        relative_parts = path.relative_to(LOCAL_CLI_ROOT).parts
-        if any(part in EXCLUDED_BUNDLE_NAMES for part in relative_parts):
-            continue
-        if path.is_file() and path.suffix in {".pyc", ".pyo"}:
-            continue
-        paths.append(path)
-    with tarfile.open(target, "w:gz") as archive:
-        for path in paths:
-            archive.add(path, arcname=path.relative_to(LOCAL_CLI_ROOT.parent))
-            if on_tick is not None:
-                on_tick()
-    return target
-
-
-def publish_bootstrap(
-    dist_dir: Path | None = None,
-    *,
-    on_tick: Callable[[], None] | None = None,
-) -> tuple[Path, Path]:
-    """Publish the bootstrap script and source bundle into the shared location."""
-    bootstrap_dir = bootstrap_publish_dir(dist_dir)
-    bootstrap_dir.mkdir(parents=True, exist_ok=True)
-    source_script = LOCAL_CLI_ROOT / "scripts" / BOOTSTRAP_SCRIPT_NAME
-    target_script = bootstrap_script_path(dist_dir)
-    shutil.copy2(source_script, target_script)
-    target_script.chmod(0o755)
-    if on_tick is not None:
-        on_tick()
-    bundle = create_source_bundle(dist_dir, on_tick=on_tick)
-    return target_script, bundle
-
-
-def recovery_wheels() -> tuple[Path, ...]:
-    """Return locally preserved recovery wheels, newest first."""
-    if not RECOVERY_DIR.exists():
-        return ()
-    return tuple(sorted(RECOVERY_DIR.glob("*.whl"), key=lambda item: item.stat().st_mtime, reverse=True))
-
-
-def latest_recovery_wheel() -> Path | None:
-    """Return the latest locally preserved recovery wheel when available."""
-    wheels = recovery_wheels()
-    return wheels[0] if wheels else None
-
-
-def preserve_recovery_wheel(wheel_path: Path) -> Path:
-    """Keep a local copy of one installed wheel for recovery use."""
-    RECOVERY_DIR.mkdir(parents=True, exist_ok=True)
-    target = RECOVERY_DIR / wheel_path.name
-    shutil.copy2(wheel_path, target)
-    current = RECOVERY_DIR / "current.whl"
-    shutil.copy2(wheel_path, current)
-    return target
-
-
-def delete_package(wheel_path: Path, dist_dir: Path | None = None) -> None:
-    """Delete one wheel file and remove its metadata entry."""
-    wheel_path.unlink(missing_ok=True)
-    remove_package_record(wheel_path.name, dist_dir or wheel_path.parent)
+    if result.returncode != 0:
+        raise PackageOperationError("install failed", result.log_path)
+    status = InstalledPackageStatus(
+        installed_version=installed_version(interpreter),
+        repo_url=_normalize_repo_url(repo_url),
+        requested_ref=ref,
+        resolved_ref=resolve_github_ref(repo_url, ref),
+        summary=summary,
+        installed_at=datetime.now(UTC).isoformat(),
+    )
+    save_install_state(status)
+    return result, status

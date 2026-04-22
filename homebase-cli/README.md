@@ -1,22 +1,12 @@
 # homebase-cli
 
-Local CLI development workspace for the NAS-backed `homebase` directory.
-
-Intended layout:
-
-- NAS source of truth: `/mnt/files/homebase`
-- local CLI workspace: `/home/sun/homebase-cli`
+CLI source tree inside the GitHub-backed `homebase` repository.
 
 Development direction:
 
-- read documentation from the NAS-backed `homebase` directory
-- keep CLI source code and local tooling in this directory
+- keep docs and CLI code in one repository
+- use GitHub refs as the source of truth for install and upgrade
 - build around real node identity rather than guessed LAN metadata
-
-Current status:
-
-- `/mnt/files/homebase` now exists as the NAS-backed documentation source
-- local CLI implementation should be developed in this repository
 
 ## Initial Decisions
 
@@ -100,18 +90,23 @@ Current useful commands:
 Planned `package` grammar:
 
 ```text
+homebase package versions
 homebase package status
 homebase package status <resource>
 homebase package install [<resource>] --ref <git-ref>
 homebase package upgrade [<resource>] --ref <git-ref>
+homebase package update [<resource>]
 homebase package install [<resource>] --ref <git-ref> --repo <git-url>
 homebase package upgrade [<resource>] --ref <git-ref> --repo <git-url>
 ```
 
 Meaning:
 
+- `package versions` lists GitHub releases or tags with a short summary
 - no resource means the current node
 - `--ref` accepts branch, tag, or commit SHA
 - `--repo` defaults to `https://github.com/sunwbeck/homebase.git`
+- `package install` can choose from listed GitHub versions when `--ref` is omitted
+- `package upgrade` and `package update` move to the latest available GitHub release or default branch
 - install on a node should follow normal Python environment behavior on that node
 - `package status` should later show which revision is installed on each managed node

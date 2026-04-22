@@ -44,19 +44,24 @@ That means:
 Planned CLI grammar:
 
 ```text
+hb package versions
 hb package status
 hb package status <resource>
 hb package install [<resource>] --ref <git-ref>
 hb package upgrade [<resource>] --ref <git-ref>
+hb package update [<resource>]
 hb package install [<resource>] --ref <git-ref> --repo <git-url>
 hb package upgrade [<resource>] --ref <git-ref> --repo <git-url>
 ```
 
 Grammar notes:
 
+- `package versions` lists GitHub releases or tags together with a short summary
 - if no `<resource>` is given, operate on the current node
 - `--ref` accepts a branch, tag, release tag, or commit SHA
 - `--repo` defaults to `https://github.com/sunwbeck/homebase.git`
+- `package install` can choose from listed GitHub versions when `--ref` is omitted
+- `package upgrade` or `package update` should move to the latest available GitHub release, or the default branch if no release exists
 - install or upgrade should follow normal Python environment behavior on the target node
 - `package status` should show which Git ref or commit is installed on each managed node
 
