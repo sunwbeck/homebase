@@ -1,0 +1,23 @@
+[project]
+name = "homebase-cli"
+version = "0.1.1"
+description = "CLI workspace for the NAS-backed homebase."
+requires-python = ">=3.11"
+dependencies = [
+    "typer>=0.12,<1.0",
+    "rich>=13.7,<14.0",
+]
+
+[project.scripts]
+homebase = "homebase_cli.cli:app"
+hb = "homebase_cli.cli:app"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
