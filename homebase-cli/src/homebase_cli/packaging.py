@@ -7,8 +7,10 @@ from datetime import UTC, datetime
 from pathlib import Path
 import importlib.metadata
 import json
+import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 import time
@@ -166,19 +168,50 @@ def install_command(repo_url: str, ref: str, python_bin: str = "python3") -> str
     return f"{shlex.quote(python_bin)} -m pip install --upgrade {shlex.quote(target)}"
 
 
+def _github_token() -> str | None:
+    """Return an auth token from env or gh when available."""
+    for key in ("GH_TOKEN", "GITHUB_TOKEN"):
+        value = os.environ.get(key, "").strip()
+        if value:
+            return value
+    gh_path = shutil.which("gh")
+    if gh_path is None:
+        return None
+    result = subprocess.run(
+        [gh_path, "auth", "token"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        return None
+    token = result.stdout.strip()
+    return token or None
+
+
 def _fetch_json(url: str) -> Any:
     """Fetch one JSON payload from GitHub."""
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "homebase-cli",
+    }
+    token = _github_token()
+    if token is not None:
+        headers["Authorization"] = f"Bearer {token}"
     request = Request(
         url,
-        headers={
-            "Accept": "application/vnd.github+json",
-            "User-Agent": "homebase-cli",
-        },
+        headers=headers,
     )
     try:
         with urlopen(request, timeout=20) as response:
             return json.loads(response.read().decode("utf-8"))
     except HTTPError as exc:
+        if exc.code == 404 and token is None:
+            raise RuntimeError(
+                "GitHub API request failed with HTTP 404. "
+                "This usually means the repo is private and no GitHub token is available. "
+                "Run `gh auth login` again or set `GH_TOKEN`/`GITHUB_TOKEN`."
+            ) from exc
         raise RuntimeError(f"GitHub API request failed with HTTP {exc.code} for {url}") from exc
     except URLError as exc:
         raise RuntimeError(f"GitHub API request failed for {url}: {exc.reason}") from exc

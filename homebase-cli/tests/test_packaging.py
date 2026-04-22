@@ -1,4 +1,5 @@
 from pathlib import Path
+from urllib.error import HTTPError
 
 from homebase_cli.packaging import (
     DEFAULT_REPO_URL,
@@ -90,3 +91,48 @@ def test_save_and_load_install_state_round_trip(tmp_path: Path, monkeypatch) -> 
     assert loaded.installed_version == "0.2.0"
     assert loaded.requested_ref == "v0.2.0"
     assert loaded.resolved_ref == "abc123"
+
+
+def test_fetch_json_uses_env_token(monkeypatch) -> None:
+    seen = {}
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self):
+            return b'{"ok": true}'
+
+    def fake_urlopen(request, timeout=20):
+        seen["authorization"] = request.headers.get("Authorization")
+        return FakeResponse()
+
+    monkeypatch.setenv("GH_TOKEN", "secret-token")
+    monkeypatch.setattr("homebase_cli.packaging.urlopen", fake_urlopen)
+    from homebase_cli.packaging import _fetch_json
+
+    payload = _fetch_json("https://api.github.com/repos/sunwbeck/homebase/releases")
+    assert payload == {"ok": True}
+    assert seen["authorization"] == "Bearer secret-token"
+
+
+def test_fetch_json_404_without_token_has_private_repo_message(monkeypatch) -> None:
+    def fake_urlopen(request, timeout=20):
+        raise HTTPError(request.full_url, 404, "Not Found", hdrs=None, fp=None)
+
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.setattr("homebase_cli.packaging.shutil.which", lambda name: None)
+    monkeypatch.setattr("homebase_cli.packaging.urlopen", fake_urlopen)
+    from homebase_cli.packaging import _fetch_json
+
+    try:
+        _fetch_json("https://api.github.com/repos/sunwbeck/homebase/releases")
+    except RuntimeError as exc:
+        assert "repo is private" in str(exc)
+        assert "gh auth login" in str(exc)
+    else:
+        raise AssertionError("expected RuntimeError")
