@@ -16,19 +16,20 @@ Repository layout:
 The first install path should stay copy-paste simple.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/sunwbeck/homebase/main/scripts/install-homebase.sh | bash
+bash ./scripts/install-homebase.sh
 ```
 
 If a specific GitHub ref should be installed, use the same script with `--ref`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/sunwbeck/homebase/main/scripts/install-homebase.sh | bash -s -- --ref main
+bash ./scripts/install-homebase.sh --ref main
 ```
 
 Install behavior stays generic:
 
 - if a venv is active, install into that venv
-- otherwise install into the user's default Python environment with `--user`
+- otherwise the install script creates or reuses `~/.local/share/homebase-cli/.venv`
+- and links `hb` and `homebase` into `~/.local/bin`
 
 ## Version And Rollout Direction
 

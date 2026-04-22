@@ -5,18 +5,18 @@ repo_url="https://github.com/sunwbeck/homebase.git"
 git_ref="main"
 subdirectory="homebase-cli"
 python_bin=""
-user_mode="auto"
+managed_venv="${HOME}/.local/share/homebase-cli/.venv"
 
 usage() {
   cat <<'EOF'
-Usage: install-homebase.sh [--ref <git-ref>] [--repo <git-url>] [--python <python-bin>] [--user|--no-user]
+Usage: install-homebase.sh [--ref <git-ref>] [--repo <git-url>] [--python <python-bin>] [--venv <venv-path>]
 
 Install homebase directly from the GitHub repository.
 
 Examples:
-  curl -fsSL https://raw.githubusercontent.com/sunwbeck/homebase/main/scripts/install-homebase.sh | bash
-  curl -fsSL https://raw.githubusercontent.com/sunwbeck/homebase/main/scripts/install-homebase.sh | bash -s -- --ref main
-  curl -fsSL https://raw.githubusercontent.com/sunwbeck/homebase/main/scripts/install-homebase.sh | bash -s -- --ref v0.1.0
+  bash ./scripts/install-homebase.sh
+  bash ./scripts/install-homebase.sh --ref main
+  bash ./scripts/install-homebase.sh --ref v0.1.0
 EOF
 }
 
@@ -34,13 +34,9 @@ while [[ $# -gt 0 ]]; do
       python_bin="${2:?missing value for --python}"
       shift 2
       ;;
-    --user)
-      user_mode="yes"
-      shift
-      ;;
-    --no-user)
-      user_mode="no"
-      shift
+    --venv)
+      managed_venv="${2:?missing value for --venv}"
+      shift 2
       ;;
     -h|--help)
       usage
@@ -66,22 +62,27 @@ if [[ -z "${python_bin}" ]]; then
 fi
 
 install_target="git+${repo_url}@${git_ref}#subdirectory=${subdirectory}"
-pip_args=("-m" "pip" "install" "--upgrade")
 
-if [[ "${user_mode}" == "yes" ]]; then
-  pip_args+=("--user")
-elif [[ "${user_mode}" == "auto" && -z "${VIRTUAL_ENV:-}" ]]; then
-  pip_args+=("--user")
+if [[ -n "${VIRTUAL_ENV:-}" ]]; then
+  install_python="${python_bin}"
+  echo "Installing homebase into active venv ${VIRTUAL_ENV} from ${repo_url}@${git_ref}"
+else
+  echo "Creating or reusing managed venv at ${managed_venv}"
+  "${python_bin}" -m venv "${managed_venv}"
+  install_python="${managed_venv}/bin/python"
+  mkdir -p "${HOME}/.local/bin"
 fi
 
+"${install_python}" -m pip install --upgrade pip
 echo "Installing homebase from ${repo_url}@${git_ref}"
-"${python_bin}" "${pip_args[@]}" "${install_target}"
+"${install_python}" -m pip install --upgrade "${install_target}"
 
-if [[ " ${pip_args[*]} " == *" --user "* ]]; then
-  user_bin="${HOME}/.local/bin"
-  if [[ ":${PATH}:" != *":${user_bin}:"* ]]; then
+if [[ -z "${VIRTUAL_ENV:-}" ]]; then
+  ln -sfn "${managed_venv}/bin/hb" "${HOME}/.local/bin/hb"
+  ln -sfn "${managed_venv}/bin/homebase" "${HOME}/.local/bin/homebase"
+  if [[ ":${PATH}:" != *":${HOME}/.local/bin:"* ]]; then
     echo
-    echo "Install finished. Add ${user_bin} to PATH if hb is not found:"
+    echo "Install finished. Add ${HOME}/.local/bin to PATH if hb is not found:"
     echo "  export PATH=\"\$HOME/.local/bin:\$PATH\""
   fi
 fi
