@@ -16,12 +16,17 @@ import socket
 import subprocess
 from typing import Any
 
+from homebase_cli.packaging import DEFAULT_REPO_URL, load_install_state, install_github_ref, latest_github_version
+
 
 DEFAULT_CLIENT_PORT = 8428
 DISCOVERY_PATH = "/discovery"
 PAIR_PATH = "/pair"
 PROFILE_PATH = "/profile"
 HEALTH_PATH = "/health"
+PACKAGE_STATUS_PATH = "/package/status"
+PACKAGE_INSTALL_PATH = "/package/install"
+PACKAGE_UPGRADE_PATH = "/package/upgrade"
 CLIENT_STATE_PATH = Path.home() / ".config" / "homebase" / "client-state.json"
 
 
@@ -62,6 +67,15 @@ class ClientState:
 
     pair_code: str
     paired_controllers: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class PackageInstallRequest:
+    """Remote package install request from one paired controller."""
+
+    repo_url: str = DEFAULT_REPO_URL
+    ref: str = "main"
+    include_prerelease: bool = False
 
 
 def cli_version() -> str:
@@ -296,6 +310,37 @@ def profile_payload() -> dict[str, Any]:
     return asdict(local_profile())
 
 
+def package_status_payload() -> dict[str, Any]:
+    """Return the current installed homebase package state."""
+    status = load_install_state()
+    return {
+        "installed_version": status.installed_version,
+        "repo_url": status.repo_url,
+        "requested_ref": status.requested_ref,
+        "resolved_ref": status.resolved_ref,
+        "summary": status.summary,
+        "installed_at": status.installed_at,
+    }
+
+
+def parse_package_install_request(payload: dict[str, Any]) -> PackageInstallRequest:
+    """Validate and normalize one remote package install request."""
+    repo_url = str(payload.get("repo_url", DEFAULT_REPO_URL)).strip() or DEFAULT_REPO_URL
+    ref = str(payload.get("ref", "")).strip()
+    include_prerelease = bool(payload.get("include_prerelease", False))
+    if not ref:
+        raise ValueError("package install request is missing ref")
+    return PackageInstallRequest(repo_url=repo_url, ref=ref, include_prerelease=include_prerelease)
+
+
+def _require_paired_controller(headers: Any) -> str | None:
+    """Return one paired controller id from the request headers."""
+    controller_id = headers.get("X-Homebase-Controller", "").strip()
+    if not controller_id or not is_paired(controller_id):
+        return None
+    return controller_id
+
+
 def make_handler() -> type[BaseHTTPRequestHandler]:
     """Create the request handler class for the client server."""
 
@@ -321,29 +366,78 @@ def make_handler() -> type[BaseHTTPRequestHandler]:
                 self._send_json(discovery_payload())
                 return
             if self.path == PROFILE_PATH:
-                controller_id = self.headers.get("X-Homebase-Controller", "").strip()
-                if not controller_id or not is_paired(controller_id):
+                if _require_paired_controller(self.headers) is None:
                     self._send_json({"error": "not paired"}, status=HTTPStatus.FORBIDDEN)
                     return
                 self._send_json(profile_payload())
                 return
+            if self.path == PACKAGE_STATUS_PATH:
+                if _require_paired_controller(self.headers) is None:
+                    self._send_json({"error": "not paired"}, status=HTTPStatus.FORBIDDEN)
+                    return
+                self._send_json(package_status_payload())
+                return
             self.send_error(HTTPStatus.NOT_FOUND, "not found")
 
         def do_POST(self) -> None:  # noqa: N802
-            if self.path != PAIR_PATH:
+            if self.path == PAIR_PATH:
+                content_length = int(self.headers.get("Content-Length", "0"))
+                body = self.rfile.read(content_length).decode("utf-8") if content_length else "{}"
+                try:
+                    request = parse_pair_request(json.loads(body))
+                except (json.JSONDecodeError, ValueError) as exc:
+                    self._send_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+                    return
+                if not pair_controller(request):
+                    self._send_json({"error": "pairing code mismatch"}, status=HTTPStatus.FORBIDDEN)
+                    return
+                self._send_json(profile_payload())
+                return
+            if self.path not in {PACKAGE_INSTALL_PATH, PACKAGE_UPGRADE_PATH}:
                 self.send_error(HTTPStatus.NOT_FOUND, "not found")
+                return
+            if _require_paired_controller(self.headers) is None:
+                self._send_json({"error": "not paired"}, status=HTTPStatus.FORBIDDEN)
                 return
             content_length = int(self.headers.get("Content-Length", "0"))
             body = self.rfile.read(content_length).decode("utf-8") if content_length else "{}"
+            payload = json.loads(body) if body else {}
             try:
-                request = parse_pair_request(json.loads(body))
-            except (json.JSONDecodeError, ValueError) as exc:
+                if self.path == PACKAGE_UPGRADE_PATH:
+                    repo_url = str(payload.get("repo_url", DEFAULT_REPO_URL)).strip() or DEFAULT_REPO_URL
+                    include_prerelease = bool(payload.get("include_prerelease", False))
+                    latest = latest_github_version(repo_url, include_prerelease=include_prerelease)
+                    request = PackageInstallRequest(
+                        repo_url=repo_url,
+                        ref=latest.ref,
+                        include_prerelease=include_prerelease,
+                    )
+                    summary = latest.summary
+                else:
+                    request = parse_package_install_request(payload)
+                    summary = str(payload.get("summary", "")).strip() or None
+            except (json.JSONDecodeError, ValueError, RuntimeError) as exc:
                 self._send_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
                 return
-            if not pair_controller(request):
-                self._send_json({"error": "pairing code mismatch"}, status=HTTPStatus.FORBIDDEN)
+            try:
+                _, status = install_github_ref(
+                    request.ref,
+                    repo_url=request.repo_url,
+                    summary=summary,
+                )
+            except Exception as exc:
+                self._send_json({"error": str(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
                 return
-            self._send_json(profile_payload())
+            self._send_json(
+                {
+                    "installed_version": status.installed_version,
+                    "repo_url": status.repo_url,
+                    "requested_ref": status.requested_ref,
+                    "resolved_ref": status.resolved_ref,
+                    "summary": status.summary,
+                    "installed_at": status.installed_at,
+                }
+            )
 
         def log_message(self, format: str, *args: object) -> None:
             return

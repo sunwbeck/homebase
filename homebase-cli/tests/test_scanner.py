@@ -6,9 +6,12 @@ from homebase_cli.registry import add_node
 from homebase_cli.scanner import (
     DiscoveredNode,
     detect_scannable_networks,
+    fetch_package_status,
     iter_candidate_addresses,
     load_discovered_nodes,
     pair_with_client,
+    request_package_install,
+    request_package_upgrade,
     save_discovered_nodes,
     scan_for_clients,
     unregistered_discovered_nodes,
@@ -102,3 +105,30 @@ def test_pair_with_client_returns_profile(monkeypatch) -> None:
     )
     paired = pair_with_client("192.168.1.10", "12345678")
     assert paired == profile
+
+
+def test_fetch_package_status_returns_payload(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "homebase_cli.scanner._http_request",
+        lambda method, address, path, **kwargs: (200, '{"installed_version":"0.1.1","requested_ref":"v0.1.1"}'),
+    )
+    payload = fetch_package_status("192.168.1.10")
+    assert payload == {"installed_version": "0.1.1", "requested_ref": "v0.1.1"}
+
+
+def test_request_package_install_returns_payload(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "homebase_cli.scanner._http_request",
+        lambda method, address, path, **kwargs: (200, '{"installed_version":"0.1.1","resolved_ref":"abc123"}'),
+    )
+    payload = request_package_install("192.168.1.10", ref="v0.1.1", repo_url="https://github.com/sunwbeck/homebase.git")
+    assert payload == {"installed_version": "0.1.1", "resolved_ref": "abc123"}
+
+
+def test_request_package_upgrade_returns_payload(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "homebase_cli.scanner._http_request",
+        lambda method, address, path, **kwargs: (200, '{"installed_version":"0.1.2","resolved_ref":"def456"}'),
+    )
+    payload = request_package_upgrade("192.168.1.10", repo_url="https://github.com/sunwbeck/homebase.git")
+    assert payload == {"installed_version": "0.1.2", "resolved_ref": "def456"}

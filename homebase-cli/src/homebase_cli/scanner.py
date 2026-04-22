@@ -14,6 +14,9 @@ import subprocess
 from homebase_cli.client import (
     DEFAULT_CLIENT_PORT,
     DISCOVERY_PATH,
+    PACKAGE_INSTALL_PATH,
+    PACKAGE_STATUS_PATH,
+    PACKAGE_UPGRADE_PATH,
     PAIR_PATH,
     PROFILE_PATH,
     ClientDiscovery,
@@ -236,6 +239,103 @@ def fetch_profile(
     try:
         return parse_profile_payload(json.loads(body))
     except (json.JSONDecodeError, ValueError):
+        return None
+
+
+def fetch_package_status(
+    address: str,
+    *,
+    port: int = DEFAULT_CLIENT_PORT,
+    timeout: float = 1.0,
+    controller_id: str | None = None,
+) -> dict[str, object] | None:
+    """Fetch current installed package state from one paired client."""
+    result = _http_request(
+        "GET",
+        address,
+        PACKAGE_STATUS_PATH,
+        port=port,
+        timeout=timeout,
+        headers={"X-Homebase-Controller": controller_id or local_controller_id()},
+    )
+    if result is None:
+        return None
+    status, body = result
+    if status != 200:
+        return None
+    try:
+        return json.loads(body)
+    except json.JSONDecodeError:
+        return None
+
+
+def request_package_install(
+    address: str,
+    *,
+    ref: str,
+    repo_url: str,
+    summary: str | None = None,
+    port: int = DEFAULT_CLIENT_PORT,
+    timeout: float = 60.0,
+    controller_id: str | None = None,
+) -> dict[str, object] | None:
+    """Ask one paired client to install a specific GitHub ref."""
+    payload = {"ref": ref, "repo_url": repo_url}
+    if summary:
+        payload["summary"] = summary
+    result = _http_request(
+        "POST",
+        address,
+        PACKAGE_INSTALL_PATH,
+        port=port,
+        timeout=timeout,
+        headers={
+            "Content-Type": "application/json",
+            "X-Homebase-Controller": controller_id or local_controller_id(),
+        },
+        body=json.dumps(payload),
+    )
+    if result is None:
+        return None
+    status, body = result
+    if status != 200:
+        return None
+    try:
+        return json.loads(body)
+    except json.JSONDecodeError:
+        return None
+
+
+def request_package_upgrade(
+    address: str,
+    *,
+    repo_url: str,
+    include_prerelease: bool = False,
+    port: int = DEFAULT_CLIENT_PORT,
+    timeout: float = 60.0,
+    controller_id: str | None = None,
+) -> dict[str, object] | None:
+    """Ask one paired client to upgrade to the latest GitHub target."""
+    result = _http_request(
+        "POST",
+        address,
+        PACKAGE_UPGRADE_PATH,
+        port=port,
+        timeout=timeout,
+        headers={
+            "Content-Type": "application/json",
+            "X-Homebase-Controller": controller_id or local_controller_id(),
+        },
+        body=json.dumps({"repo_url": repo_url, "include_prerelease": include_prerelease}),
+    )
+    if result is None:
+        return None
+    status, body = result
+    if status != 200:
+        return None
+    try:
+        return json.loads(body)
+    except json.JSONDecodeError:
         return None
 
 

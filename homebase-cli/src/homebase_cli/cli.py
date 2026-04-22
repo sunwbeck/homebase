@@ -37,6 +37,9 @@ from homebase_cli.registry import add_node, child_nodes, load_nodes
 from homebase_cli.resources import all_resources, child_resources, find_resource
 from homebase_cli.scanner import (
     detect_scannable_networks,
+    fetch_package_status,
+    request_package_install,
+    request_package_upgrade,
     pair_with_client,
     save_discovered_nodes,
     scan_for_clients,
@@ -104,6 +107,16 @@ def _choose_github_version(repo_url: str, include_prerelease: bool = False) -> G
         raise typer.BadParameter(f"no GitHub versions found for {repo_url}")
     selected = _pick_from_list("GitHub versions", [item.label for item in versions])
     return versions[[item.label for item in versions].index(selected)]
+
+
+def _resolve_remote_package_target(resource: str):
+    node = find_resource(resource)
+    if node is None:
+        raise typer.BadParameter(f"unknown resource: {resource}")
+    if not node.address:
+        raise typer.BadParameter(f"resource has no client address: {resource}")
+    port = node.client_port or DEFAULT_CLIENT_PORT
+    return node, port
 
 
 def _choose_or_add_role() -> str:
@@ -477,11 +490,28 @@ def roles_command(
 
 @package_app.command("status")
 def package_status_command(
-    resource: str | None = typer.Argument(None, help="Optional resource path. Remote package status is not implemented yet."),
+    resource: str | None = typer.Argument(None, help="Optional resource path."),
 ) -> None:
-    """Show the currently installed homebase revision on this node."""
+    """Show the currently installed homebase revision on this node or one managed node."""
     if resource is not None:
-        raise typer.BadParameter("remote package status is not implemented yet")
+        _require_role("control")
+        node, port = _resolve_remote_package_target(resource)
+        payload = fetch_package_status(node.address, port=port)
+        if payload is None:
+            console.print(f"[red]Package status failed.[/red] No response from {resource} at {node.address}:{port}")
+            raise typer.Exit(code=1)
+        console.print(f"[bold]Remote package status: {resource}[/bold]")
+        console.print(f"address: {node.address}:{port}")
+        console.print(f"installed version: {payload.get('installed_version') or 'not installed'}")
+        if payload.get("requested_ref"):
+            console.print(f"requested ref: {payload.get('requested_ref')}")
+        if payload.get("resolved_ref"):
+            console.print(f"resolved commit: {payload.get('resolved_ref')}")
+        if payload.get("summary"):
+            console.print(f"summary: {payload.get('summary')}")
+        if payload.get("installed_at"):
+            console.print(f"installed at: {payload.get('installed_at')}")
+        return
     current = load_install_state()
     latest: GitHubVersion | None = None
     latest_error: str | None = None
@@ -589,15 +619,13 @@ def _run_install_flow(
 
 @package_app.command("install")
 def package_install_command(
-    resource: str | None = typer.Argument(None, help="Optional resource path. Remote install is not implemented yet."),
+    resource: str | None = typer.Argument(None, help="Optional resource path."),
     ref: str | None = typer.Option(None, "--ref", help="GitHub ref to install: branch, tag, release tag, or commit SHA."),
     repo_url: str = typer.Option(DEFAULT_REPO_URL, "--repo", help="GitHub repository URL."),
     python_bin: str | None = typer.Option(None, "--python", help="Explicit Python executable to install into. Defaults to the current Python environment."),
     include_prerelease: bool = typer.Option(False, "--pre-release", help="Include prerelease GitHub releases when choosing interactively."),
 ) -> None:
     """Install one GitHub ref, or choose a version interactively."""
-    if resource is not None:
-        raise typer.BadParameter("remote package install is not implemented yet")
     selected_summary: str | None = None
     selected_ref = ref
     if selected_ref is None:
@@ -608,19 +636,48 @@ def package_install_command(
             raise typer.Exit(code=1)
         selected_ref = chosen.ref
         selected_summary = chosen.summary
+    if resource is not None:
+        _require_role("control")
+        node, port = _resolve_remote_package_target(resource)
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("{task.description}"),
+            BarColumn(),
+            TaskProgressColumn(),
+            console=console,
+        ) as progress:
+            task = progress.add_task(f"1/2 Resolve remote target: {resource}", total=100)
+            progress.update(task, completed=100)
+            task = progress.add_task(f"2/2 Request install on {resource}", total=100)
+            progress.update(task, completed=30)
+            payload = request_package_install(
+                node.address,
+                ref=selected_ref,
+                repo_url=repo_url,
+                summary=selected_summary,
+                port=port,
+            )
+            progress.update(task, completed=100)
+        if payload is None:
+            console.print(f"[red]Remote package install failed.[/red] No response from {resource} at {node.address}:{port}")
+            raise typer.Exit(code=1)
+        console.print(f"[green]Remote install completed:[/green] {resource}")
+        console.print(f"installed version: {payload.get('installed_version') or 'unknown'}")
+        console.print(f"requested ref: {payload.get('requested_ref') or selected_ref}")
+        if payload.get("resolved_ref"):
+            console.print(f"resolved commit: {payload.get('resolved_ref')}")
+        return
     _run_install_flow(ref=selected_ref, repo_url=repo_url, python_bin=python_bin, summary=selected_summary)
 
 
 @package_app.command("upgrade")
 def package_upgrade_command(
-    resource: str | None = typer.Argument(None, help="Optional resource path. Remote upgrade is not implemented yet."),
+    resource: str | None = typer.Argument(None, help="Optional resource path."),
     repo_url: str = typer.Option(DEFAULT_REPO_URL, "--repo", help="GitHub repository URL."),
     python_bin: str | None = typer.Option(None, "--python", help="Explicit Python executable to install into. Defaults to the current Python environment."),
     include_prerelease: bool = typer.Option(False, "--pre-release", help="Allow prerelease versions when selecting the latest target."),
 ) -> None:
     """Upgrade to the latest GitHub release, or default branch when no release exists."""
-    if resource is not None:
-        raise typer.BadParameter("remote package upgrade is not implemented yet")
     try:
         latest = latest_github_version(repo_url, include_prerelease=include_prerelease)
     except RuntimeError as exc:
@@ -628,6 +685,36 @@ def package_upgrade_command(
         raise typer.Exit(code=1)
     console.print(f"[bold]Selected latest target:[/bold] {latest.version}")
     console.print(f"summary: {latest.summary}")
+    if resource is not None:
+        _require_role("control")
+        node, port = _resolve_remote_package_target(resource)
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("{task.description}"),
+            BarColumn(),
+            TaskProgressColumn(),
+            console=console,
+        ) as progress:
+            task = progress.add_task(f"1/2 Resolve remote target: {resource}", total=100)
+            progress.update(task, completed=100)
+            task = progress.add_task(f"2/2 Request upgrade on {resource}", total=100)
+            progress.update(task, completed=30)
+            payload = request_package_upgrade(
+                node.address,
+                repo_url=repo_url,
+                include_prerelease=include_prerelease,
+                port=port,
+            )
+            progress.update(task, completed=100)
+        if payload is None:
+            console.print(f"[red]Remote package upgrade failed.[/red] No response from {resource} at {node.address}:{port}")
+            raise typer.Exit(code=1)
+        console.print(f"[green]Remote upgrade completed:[/green] {resource}")
+        console.print(f"installed version: {payload.get('installed_version') or 'unknown'}")
+        console.print(f"requested ref: {payload.get('requested_ref') or latest.ref}")
+        if payload.get("resolved_ref"):
+            console.print(f"resolved commit: {payload.get('resolved_ref')}")
+        return
     _run_install_flow(ref=latest.ref, repo_url=repo_url, python_bin=python_bin, summary=latest.summary)
 
 

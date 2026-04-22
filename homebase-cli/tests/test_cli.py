@@ -177,6 +177,24 @@ def test_package_status_prints_local_install_state(monkeypatch) -> None:
     assert "latest available: v0.1.2" in result.stdout
 
 
+def test_package_status_remote_uses_registered_node(monkeypatch) -> None:
+    runner = CliRunner()
+    monkeypatch.setattr(
+        "homebase_cli.cli.find_resource",
+        lambda resource: SimpleNamespace(address="192.168.1.10", client_port=8428),
+    )
+    monkeypatch.setattr(
+        "homebase_cli.cli.fetch_package_status",
+        lambda address, port=8428: {"installed_version": "0.1.1", "requested_ref": "v0.1.1", "resolved_ref": "abc123"},
+    )
+    with runner.isolated_filesystem():
+        Path("settings.toml").write_text('role = "control"\nroles = ["control", "client"]\n', encoding="utf-8")
+        result = runner.invoke(app, ["package", "status", "host.app"], env={"HOMEBASE_SETTINGS_PATH": "settings.toml"})
+        assert result.exit_code == 0
+        assert "Remote package status: host.app" in result.stdout
+        assert "installed version: 0.1.1" in result.stdout
+
+
 def test_package_install_prompts_for_github_version_before_progress(monkeypatch) -> None:
     runner = CliRunner()
     monkeypatch.setattr(
@@ -214,6 +232,32 @@ def test_package_install_can_target_explicit_python(monkeypatch) -> None:
     assert "Installed into Python: /tmp/custom/bin/python" in result.stdout
 
 
+def test_package_install_remote_requests_install(monkeypatch) -> None:
+    runner = CliRunner()
+    monkeypatch.setattr(
+        "homebase_cli.cli.find_resource",
+        lambda resource: SimpleNamespace(address="192.168.1.10", client_port=8428),
+    )
+    monkeypatch.setattr(
+        "homebase_cli.cli.request_package_install",
+        lambda address, ref, repo_url, summary=None, port=8428: {
+            "installed_version": "0.1.1",
+            "requested_ref": ref,
+            "resolved_ref": "abc123",
+        },
+    )
+    with runner.isolated_filesystem():
+        Path("settings.toml").write_text('role = "control"\nroles = ["control", "client"]\n', encoding="utf-8")
+        result = runner.invoke(
+            app,
+            ["package", "install", "host.app", "--ref", "v0.1.1"],
+            env={"HOMEBASE_SETTINGS_PATH": "settings.toml"},
+        )
+        assert result.exit_code == 0
+        assert "Remote install completed: host.app" in result.stdout
+        assert "requested ref: v0.1.1" in result.stdout
+
+
 def test_package_upgrade_uses_latest_github_version(monkeypatch) -> None:
     runner = CliRunner()
     monkeypatch.setattr(
@@ -230,6 +274,32 @@ def test_package_upgrade_uses_latest_github_version(monkeypatch) -> None:
     result = runner.invoke(app, ["package", "upgrade"])
     assert result.exit_code == 0
     assert "Selected latest target: v0.1.2" in result.stdout
+
+
+def test_package_upgrade_remote_requests_upgrade(monkeypatch) -> None:
+    runner = CliRunner()
+    monkeypatch.setattr(
+        "homebase_cli.cli.latest_github_version",
+        lambda repo_url, include_prerelease=False: SimpleNamespace(ref="v0.1.2", version="v0.1.2", summary="latest note"),
+    )
+    monkeypatch.setattr(
+        "homebase_cli.cli.find_resource",
+        lambda resource: SimpleNamespace(address="192.168.1.10", client_port=8428),
+    )
+    monkeypatch.setattr(
+        "homebase_cli.cli.request_package_upgrade",
+        lambda address, repo_url, include_prerelease=False, port=8428: {
+            "installed_version": "0.1.2",
+            "requested_ref": "v0.1.2",
+            "resolved_ref": "def456",
+        },
+    )
+    with runner.isolated_filesystem():
+        Path("settings.toml").write_text('role = "control"\nroles = ["control", "client"]\n', encoding="utf-8")
+        result = runner.invoke(app, ["package", "upgrade", "host.app"], env={"HOMEBASE_SETTINGS_PATH": "settings.toml"})
+        assert result.exit_code == 0
+        assert "Remote upgrade completed: host.app" in result.stdout
+        assert "requested ref: v0.1.2" in result.stdout
 
 
 def test_package_update_alias_calls_upgrade(monkeypatch) -> None:

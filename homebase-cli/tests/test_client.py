@@ -2,9 +2,11 @@ from pathlib import Path
 
 from homebase_cli.client import (
     ClientState,
+    PackageInstallRequest,
     PairRequest,
     load_client_state,
     pair_controller,
+    parse_package_install_request,
     parse_discovery_payload,
     parse_pair_request,
     parse_profile_payload,
@@ -53,6 +55,15 @@ def test_pair_controller_rotates_code_on_success(tmp_path: Path) -> None:
     updated = load_client_state(path)
     assert "control" in updated.paired_controllers
     assert updated.pair_code != "12345678"
+
+
+def test_parse_package_install_request_requires_ref() -> None:
+    request = parse_package_install_request({"repo_url": "https://github.com/sunwbeck/homebase.git", "ref": "v0.1.1"})
+    assert request == PackageInstallRequest(
+        repo_url="https://github.com/sunwbeck/homebase.git",
+        ref="v0.1.1",
+        include_prerelease=False,
+    )
 
 
 def test_state_path_uses_environment_override(tmp_path: Path, monkeypatch) -> None:
