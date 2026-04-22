@@ -16,18 +16,18 @@ Repository layout:
 The first install path should stay copy-paste simple.
 
 ```bash
-gh api repos/sunwbeck/homebase/contents/scripts/install-homebase.sh?ref=main --jq .content | tr -d '\n' | base64 -d | bash
+curl -fsSL https://raw.githubusercontent.com/sunwbeck/homebase/main/scripts/install-homebase.sh | bash
 ```
 
 If a specific GitHub ref should be installed, use the same script with `--ref`:
 
 ```bash
-gh api repos/sunwbeck/homebase/contents/scripts/install-homebase.sh?ref=main --jq .content | tr -d '\n' | base64 -d | bash -s -- --ref main
+curl -fsSL https://raw.githubusercontent.com/sunwbeck/homebase/main/scripts/install-homebase.sh | bash -s -- --ref main
 ```
 
 Install behavior stays generic:
 
-- this works from any directory on a machine that already has `gh` authentication
+- this works from any directory without GitHub CLI authentication
 - if a venv is active, install into that venv
 - otherwise the install script creates or reuses `~/.local/share/homebase-cli/.venv`
 - and links `hb` and `homebase` into `~/.local/bin`
