@@ -2,6 +2,8 @@
 
 This directory contains the Python package for `homebase`.
 
+The installed command is `homebase`. `hb` is just the short alias.
+
 It provides two things in one package:
 
 - the operator CLI used on the control node
@@ -12,38 +14,38 @@ It provides two things in one package:
 General:
 
 ```bash
-hb init
-hb role
-hb roles
-hb ls
-hb info host.app
+homebase init
+homebase role
+homebase roles
+homebase ls
+homebase info host.app
 ```
 
 Client side:
 
 ```bash
-hb client code --refresh
-hb client serve
+homebase client code --refresh
+homebase client serve
 ```
 
 Control side:
 
 ```bash
-hb node scan
-hb node add
-hb package status host.app
-hb package install host.app --ref v0.1.1
-hb package upgrade host.app
+homebase node scan
+homebase node add
+homebase package status host.app
+homebase package install host.app --ref v0.1.1
+homebase package upgrade host.app
 ```
 
 Local package management:
 
 ```bash
-hb package versions
-hb package status
-hb package install --ref main
-hb package upgrade
-hb package update
+homebase package versions
+homebase package status
+homebase package install --ref main
+homebase package upgrade
+homebase package update
 ```
 
 ## Development
