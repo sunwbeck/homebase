@@ -1528,16 +1528,12 @@ def _build_node_app() -> typer.Typer:
 def _build_connect_app() -> typer.Typer:
     runtime_connect_app = typer.Typer(invoke_without_command=True, help="Connect controllers and managed nodes.")
     runtime_connect_app.callback()(connect_callback)
-    current_role = _current_runtime_role()
-    if current_role in (None, "controller"):
-        runtime_connect_app.command("scan")(node_scan_command)
-        runtime_connect_app.command("add")(node_add_command)
-        runtime_connect_app.command("status")(connect_status_command)
-    if current_role in (None, "managed"):
-        runtime_connect_app.command("code")(client_code_command)
-        runtime_connect_app.command("status")(connect_status_command)
-        runtime_connect_app.command("profile", hidden=True)(client_profile_command)
-        runtime_connect_app.command("identity", hidden=True)(client_identity_command)
+    runtime_connect_app.command("scan")(node_scan_command)
+    runtime_connect_app.command("add")(node_add_command)
+    runtime_connect_app.command("code")(client_code_command)
+    runtime_connect_app.command("status")(connect_status_command)
+    runtime_connect_app.command("profile", hidden=True)(client_profile_command)
+    runtime_connect_app.command("identity", hidden=True)(client_identity_command)
     return runtime_connect_app
 
 
@@ -1595,17 +1591,15 @@ def _build_dev_app() -> typer.Typer:
 def _build_root_app() -> typer.Typer:
     runtime_app = typer.Typer(no_args_is_help=True, help="Manage homebase controller and managed nodes.")
     runtime_app.command("init")(init_command)
-    current_role = _current_runtime_role()
     runtime_app.add_typer(service_app, name="service")
     runtime_app.add_typer(_build_connect_app(), name="connect")
-    if current_role in (None, "controller"):
-        runtime_app.command("status")(status_command)
-        runtime_app.add_typer(_build_role_app(), name="role")
-        runtime_app.add_typer(_build_node_app(), name="node")
-        runtime_app.add_typer(_build_group_app(), name="group")
-        runtime_app.add_typer(_build_link_app(), name="link")
-        runtime_app.add_typer(inventory_app, name="inventory")
-        runtime_app.add_typer(state_app, name="state")
+    runtime_app.command("status")(status_command)
+    runtime_app.add_typer(_build_role_app(), name="role")
+    runtime_app.add_typer(_build_node_app(), name="node")
+    runtime_app.add_typer(_build_group_app(), name="group")
+    runtime_app.add_typer(_build_link_app(), name="link")
+    runtime_app.add_typer(inventory_app, name="inventory")
+    runtime_app.add_typer(state_app, name="state")
     runtime_app.add_typer(_build_package_app(), name="package")
     runtime_app.add_typer(_build_dev_app(), name="dev")
     return runtime_app
