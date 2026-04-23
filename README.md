@@ -34,12 +34,12 @@ On the control node:
 
 ```bash
 homebase init
-homebase node scan
-homebase node add
-homebase --add host-node
-homebase --add app-tier
-homebase --select host-node --add app-tier
-homebase --select host.app --add app-tier
+homebase connect scan
+homebase connect add
+homebase --group --add host-node
+homebase --group --add app-tier
+homebase --group --select host-node --add app-tier
+homebase --node --select host.app --add app-tier
 homebase state set host.app status active
 ```
 
@@ -87,18 +87,18 @@ What they do:
 Use `homebase --select ...` when you want to inspect or change one local role, node, or group directly.
 
 ```bash
-homebase --select role --description
-homebase --select role --edit control
-homebase --add app-tier
-homebase --remove app-tier
-homebase --select host.app --description
-homebase --select host.app --edit host.api
-homebase --select host.app --add app-tier
-homebase --select host.app --remove app-tier
-homebase --select host-node --description
-homebase --select host-node --edit host-cluster
-homebase --select host-node --add app-tier
-homebase --select host-node --remove app-tier
+homebase --role --description
+homebase --role --edit control
+homebase --group --add app-tier
+homebase --group --remove app-tier
+homebase --node --select host.app --description
+homebase --node --select host.app --edit host.api
+homebase --node --select host.app --add app-tier
+homebase --node --select host.app --remove app-tier
+homebase --group --select host-node --description
+homebase --group --select host-node --edit host-cluster
+homebase --group --select host-node --add app-tier
+homebase --group --select host-node --remove app-tier
 ```
 
 Use `homebase list` when you want to browse registered nodes and groups.
