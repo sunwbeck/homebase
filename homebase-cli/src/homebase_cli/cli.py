@@ -542,7 +542,7 @@ def package_versions_command(
     repo_url: str = typer.Option(DEFAULT_REPO_URL, "--repo", help="GitHub repository URL."),
     include_prerelease: bool = typer.Option(False, "--pre-release", help="Include prerelease GitHub releases."),
 ) -> None:
-    """List installable GitHub versions with short release notes."""
+    """List installable GitHub refs with short release notes."""
     try:
         versions = github_versions(repo_url, include_prerelease=include_prerelease)
     except RuntimeError as exc:
@@ -553,8 +553,8 @@ def package_versions_command(
         return
     table = Table(show_header=True, header_style="bold")
     table.add_column("#", justify="right")
-    table.add_column("Version")
-    table.add_column("Type")
+    table.add_column("Ref")
+    table.add_column("Kind")
     table.add_column("Published")
     table.add_column("Summary")
     for index, item in enumerate(versions, start=1):

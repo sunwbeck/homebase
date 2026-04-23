@@ -151,7 +151,8 @@ def test_package_versions_prints_github_versions(monkeypatch) -> None:
     result = runner.invoke(app, ["package", "versions"])
     assert result.exit_code == 0
     assert "pairing fix" in result.stdout
-    assert "Version" in result.stdout
+    assert "Ref" in result.stdout
+    assert "Kind" in result.stdout
 
 
 def test_package_version_alias_prints_github_versions(monkeypatch) -> None:
