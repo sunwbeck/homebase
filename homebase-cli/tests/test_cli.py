@@ -354,8 +354,7 @@ def test_node_edit_name_updates_local_node_name(monkeypatch) -> None:
         Path("settings.toml").write_text('role = "controller"\nnode_name = "host.app"\n', encoding="utf-8")
         Path("nodes.toml").write_text('[[nodes]]\nname = "host.app"\nkind = "vm"\nruntime_role = "managed"\n', encoding="utf-8")
         app = load_app(monkeypatch, "settings.toml")
-        picks = iter(["host.app (local)", "name"])
-        monkeypatch.setattr("homebase_cli.cli._pick_from_list", lambda label, options: next(picks))
+        monkeypatch.setattr("homebase_cli.cli._pick_from_list", lambda label, options: "host.app (local)")
         result = runner.invoke(app, ["node", "edit"], env=env, input="host.api\n")
         assert result.exit_code == 0
         assert 'node_name = "host.api"' in Path("settings.toml").read_text(encoding="utf-8")

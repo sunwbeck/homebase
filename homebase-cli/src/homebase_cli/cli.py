@@ -1182,44 +1182,27 @@ def role_edit_command(
 @node_app.command("edit")
 def node_edit_command(
     target: str | None = typer.Argument(None, help="Optional current node name."),
-    field: str | None = typer.Argument(None, help="Optional field to edit: name or role."),
-    value: str | None = typer.Argument(None, help="Optional new value."),
+    new_name: str | None = typer.Argument(None, help="Optional new node name."),
 ) -> None:
     """Edit one registered node.
 
-    Without arguments, this lists registered nodes and lets you choose the node,
-    field, and new value interactively.
+    This command only renames nodes.
+    Without arguments, it lists registered nodes and lets you choose the node
+    first, then enter the new name.
     """
     _require_role("controller")
     selected_target = target or _choose_registered_node()
-    selected_field = (field or _pick_from_list("Node field", ("name", "role"))).strip().lower()
-    selected_value = value
-    if selected_value is None:
-        if selected_field == "role":
-            selected_value = _choose_runtime_role()
-        else:
-            selected_value = typer.prompt("New node name").strip()
-    normalized = selected_field
-    if normalized == "name":
-        node = find_node(selected_target)
-        if node is None:
-            raise typer.BadParameter(f"unknown node: {selected_target}")
-        try:
-            renamed = rename_node(node.name, selected_value)
-            if _current_node_name() == node.name:
-                set_node_name(renamed.name)
-        except ValueError as exc:
-            raise typer.BadParameter(str(exc)) from exc
-        console.print(f"[green]Renamed node:[/green] {node.name} -> {renamed.name}")
-        return
-    if normalized == "role":
-        try:
-            updated = set_node_runtime_role(selected_target, selected_value)
-        except ValueError as exc:
-            raise typer.BadParameter(str(exc)) from exc
-        console.print(f"[green]Set node type:[/green] {updated.name} -> {updated.runtime_role}")
-        return
-    raise typer.BadParameter("node edit field must be one of: name, role")
+    selected_value = (new_name.strip() if new_name is not None else "") or typer.prompt("New node name").strip()
+    node = find_node(selected_target)
+    if node is None:
+        raise typer.BadParameter(f"unknown node: {selected_target}")
+    try:
+        renamed = rename_node(node.name, selected_value)
+        if _current_node_name() == node.name:
+            set_node_name(renamed.name)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    console.print(f"[green]Renamed node:[/green] {node.name} -> {renamed.name}")
 
 
 @node_app.command("remove")
