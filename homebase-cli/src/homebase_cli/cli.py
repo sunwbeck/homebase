@@ -534,7 +534,21 @@ def node_add_command(
 
 @connect_app.command("status")
 def connect_status_command() -> None:
-    """Show controller discovery and registration status."""
+    """Show controller discovery status or managed pairing status."""
+    current_role = _current_runtime_role()
+    if current_role == "managed":
+        state = load_client_state()
+        runtime = connect_server_running()
+        console.print("[bold]Connect status[/bold]")
+        console.print(f"pair code: {state.pair_code}")
+        console.print(f"paired controllers: {len(state.paired_controllers)}")
+        if state.paired_controllers:
+            console.print(f"controllers: {', '.join(state.paired_controllers)}")
+        console.print(f"service: {'running' if runtime is not None else 'stopped'}")
+        if runtime is not None:
+            console.print(f"host: {runtime.host}")
+            console.print(f"port: {runtime.port}")
+        return
     _require_role("controller")
     discovered = load_discovered_nodes()
     pending = unregistered_discovered_nodes()
@@ -1521,6 +1535,7 @@ def _build_connect_app() -> typer.Typer:
         runtime_connect_app.command("status")(connect_status_command)
     if current_role in (None, "managed"):
         runtime_connect_app.command("code")(client_code_command)
+        runtime_connect_app.command("status")(connect_status_command)
         runtime_connect_app.command("profile", hidden=True)(client_profile_command)
         runtime_connect_app.command("identity", hidden=True)(client_identity_command)
     return runtime_connect_app
