@@ -28,7 +28,7 @@ curl -fsSL https://raw.githubusercontent.com/sunwbeck/homebase/main/scripts/inst
 
 The installer sets up `homebase` for the current user and makes `homebase` and `hb` available from `~/.local/bin`.
 
-On first run, `homebase` starts `homebase init` automatically if the local node role or node name has not been set yet.
+On first run, `homebase` or `hb` starts `homebase init` automatically if the local node role or node name has not been set yet.
 
 ## Basic Flow
 

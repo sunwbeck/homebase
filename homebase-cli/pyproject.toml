@@ -1,6 +1,6 @@
 [project]
 name = "homebase-cli"
-version = "0.1.7"
+version = "0.1.8"
 description = "CLI workspace for homebase."
 requires-python = ">=3.11"
 dependencies = [
@@ -10,8 +10,8 @@ dependencies = [
 ]
 
 [project.scripts]
-homebase = "homebase_cli.cli:app"
-hb = "homebase_cli.cli:app"
+homebase = "homebase_cli.cli:main"
+hb = "homebase_cli.cli:main"
 
 [build-system]
 requires = ["setuptools>=68"]
