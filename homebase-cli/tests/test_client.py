@@ -53,7 +53,7 @@ def test_pair_controller_rotates_code_on_success(tmp_path: Path) -> None:
     save_client_state(ClientState(pair_code="12345678", paired_controllers=()), path)
     assert pair_controller(PairRequest(controller_id="control", code="12345678"), path)
     updated = load_client_state(path)
-    assert "control" in updated.paired_controllers
+    assert updated.paired_controllers[0].controller_id == "control"
     assert updated.pair_code != "12345678"
 
 

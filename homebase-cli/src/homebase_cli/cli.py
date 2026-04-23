@@ -391,6 +391,49 @@ def _print_registered_overview() -> None:
     console.print(table)
 
 
+def _print_managed_overview() -> None:
+    """Print one managed-node overview including this node and paired controllers."""
+    local_name = _current_node_name() or socket.gethostname()
+    runtime = connect_server_running()
+    profile = local_profile()
+    state = load_client_state()
+    table = Table(show_header=True, header_style="bold")
+    table.add_column("Node")
+    table.add_column("Role")
+    table.add_column("Address")
+    table.add_column("Hostname")
+    table.add_column("OS")
+    table.add_column("Service")
+    table.add_column("Open Ports")
+    table.add_column("Services")
+    table.add_column("State")
+    table.add_row(
+        f"{local_name} (local)",
+        _current_runtime_role() or "managed",
+        detect_primary_address() or "",
+        profile.hostname,
+        profile.platform,
+        "running" if runtime is not None else "stopped",
+        ", ".join(str(port) for port in profile.open_ports),
+        ", ".join(profile.services),
+        "self",
+    )
+    for controller in state.paired_controllers:
+        table.add_row(
+            controller.hostname or controller.controller_id,
+            "controller",
+            controller.address or "",
+            controller.hostname or "",
+            "",
+            "",
+            "",
+            "",
+            "paired controller",
+        )
+    console.print("[bold]Node status[/bold]")
+    console.print(table)
+
+
 def _print_local_role() -> None:
     settings = load_settings()
     console.print(f"role: {settings.role or 'not set'}")
@@ -649,15 +692,21 @@ def connect_status_command() -> None:
         runtime = connect_server_running()
         table = Table(show_header=True, header_style="bold")
         table.add_column("Pair Code")
-        table.add_column("Controllers")
+        table.add_column("Controller")
+        table.add_column("Address")
+        table.add_column("Hostname")
         table.add_column("Service")
         table.add_column("Endpoint")
-        table.add_row(
-            _format_pair_code(state.pair_code),
-            ", ".join(state.paired_controllers) if state.paired_controllers else "",
-            "running" if runtime is not None else "stopped",
-            f"{runtime.host}:{runtime.port}" if runtime is not None else "",
-        )
+        controllers = list(state.paired_controllers) or [None]
+        for index, controller in enumerate(controllers):
+            table.add_row(
+                _format_pair_code(state.pair_code) if index == 0 else "",
+                controller.controller_id if controller is not None else "",
+                controller.address if controller is not None and controller.address is not None else "",
+                controller.hostname if controller is not None and controller.hostname is not None else "",
+                "running" if runtime is not None and index == 0 else ("stopped" if index == 0 else ""),
+                f"{runtime.host}:{runtime.port}" if runtime is not None and index == 0 else "",
+            )
         console.print(table)
         return
     _require_role("controller")
@@ -690,12 +739,14 @@ def connect_status_command() -> None:
 
 @app.command("status")
 def status_command() -> None:
-    """Show one controller-side overview table for all registered nodes.
+    """Show the current node list for this installation.
 
-    This is the main fleet status view: node name, role, address, hostname,
-    OS, service state, ports, services, groups, and saved state labels.
+    Controller nodes see all registered nodes.
+    Managed nodes see this node and any paired controllers.
     """
-    _require_role("controller")
+    if _current_runtime_role() == "managed":
+        _print_managed_overview()
+        return
     _print_registered_overview()
 
 
@@ -940,7 +991,14 @@ def service_start_command(
 def service_status_command() -> None:
     """Show the local background service status on this node."""
     current_role = _current_runtime_role()
+    local_name = _current_node_name() or socket.gethostname()
+    address = detect_primary_address() or ""
+    hostname = socket.gethostname().strip() or ""
     table = Table(show_header=True, header_style="bold")
+    table.add_column("Node")
+    table.add_column("Role")
+    table.add_column("Address")
+    table.add_column("Hostname")
     table.add_column("Mode")
     table.add_column("State")
     table.add_column("Endpoint")
@@ -949,19 +1007,29 @@ def service_status_command() -> None:
     if current_role == "managed":
         runtime = connect_server_running()
         if runtime is None:
-            table.add_row("managed connect", "stopped", "", "", str(CONNECT_LOG_PATH))
+            table.add_row(local_name, "managed", address, hostname, "managed connect", "stopped", "", "", str(CONNECT_LOG_PATH))
             console.print(table)
             return
-        table.add_row("managed connect", "running", f"{runtime.host}:{runtime.port}", str(runtime.pid), runtime.log_path)
+        table.add_row(
+            local_name,
+            "managed",
+            address,
+            hostname,
+            "managed connect",
+            "running",
+            f"{runtime.host}:{runtime.port}",
+            str(runtime.pid),
+            runtime.log_path,
+        )
         console.print(table)
         console.print(f"started at: {runtime.started_at}")
         return
     runtime = connect_server_running()
     if runtime is None:
-        table.add_row("controller daemon", "stopped", "", "", str(CONNECT_LOG_PATH))
+        table.add_row(local_name, "controller", address, hostname, "controller daemon", "stopped", "", "", str(CONNECT_LOG_PATH))
         console.print(table)
         return
-    table.add_row("controller daemon", "running", "", str(runtime.pid), runtime.log_path)
+    table.add_row(local_name, "controller", address, hostname, "controller daemon", "running", "", str(runtime.pid), runtime.log_path)
     console.print(table)
     console.print(f"started at: {runtime.started_at}")
 
@@ -1690,6 +1758,7 @@ def _build_root_app() -> typer.Typer:
     runtime_app = typer.Typer(no_args_is_help=True, help=app.info.help)
     current_role = _current_runtime_role()
     runtime_app.command("init")(init_command)
+    runtime_app.command("status")(status_command)
     runtime_app.command("doc")(docs_command)
     runtime_app.command("docs", hidden=True)(docs_alias_command)
     runtime_app.add_typer(_build_role_app(), name="role")
@@ -1698,7 +1767,6 @@ def _build_root_app() -> typer.Typer:
     runtime_app.add_typer(_build_package_app(), name="package")
     runtime_app.add_typer(_build_dev_app(), name="dev")
     if current_role == "controller":
-        runtime_app.command("status")(status_command)
         runtime_app.add_typer(_build_node_app(), name="node")
         runtime_app.add_typer(_build_group_app(), name="group")
         runtime_app.add_typer(_build_link_app(), name="link")

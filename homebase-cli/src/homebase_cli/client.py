@@ -63,6 +63,17 @@ class PairRequest:
 
     controller_id: str
     code: str
+    hostname: str | None = None
+    address: str | None = None
+
+
+@dataclass(frozen=True)
+class PairedController:
+    """One controller paired with this managed node."""
+
+    controller_id: str
+    hostname: str | None = None
+    address: str | None = None
 
 
 @dataclass(frozen=True)
@@ -70,7 +81,7 @@ class ClientState:
     """Persistent pairing state stored on the client node."""
 
     pair_code: str
-    paired_controllers: tuple[str, ...] = ()
+    paired_controllers: tuple[PairedController, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -184,6 +195,11 @@ def local_controller_id() -> str:
     hostname = socket.gethostname().strip() or "unknown"
     machine_id = read_machine_id()
     return machine_id if machine_id else hostname
+
+
+def local_controller_hostname() -> str:
+    """Return the local controller hostname."""
+    return socket.gethostname().strip() or "unknown"
 
 
 def detect_primary_address() -> str | None:
@@ -352,11 +368,13 @@ def parse_pair_request(payload: dict[str, Any]) -> PairRequest:
     """Validate and normalize one pair request."""
     controller_id = str(payload.get("controller_id", "")).strip()
     code = str(payload.get("code", "")).strip()
+    hostname = str(payload.get("hostname", "")).strip() or None
+    address = str(payload.get("address", "")).strip() or None
     if not controller_id:
         raise ValueError("pair request is missing controller_id")
     if len(code) != 8 or not code.isdigit():
         raise ValueError("pair request code must be exactly 8 digits")
-    return PairRequest(controller_id=controller_id, code=code)
+    return PairRequest(controller_id=controller_id, code=code, hostname=hostname, address=address)
 
 
 def state_path(path: Path | None = None) -> Path:
@@ -383,7 +401,26 @@ def load_client_state(path: Path | None = None) -> ClientState:
         return state
     payload = json.loads(target.read_text(encoding="utf-8"))
     pair_code = str(payload.get("pair_code", "")).strip()
-    paired = tuple(str(item).strip() for item in payload.get("paired_controllers", []) if str(item).strip())
+    paired_entries: list[PairedController] = []
+    for item in payload.get("paired_controllers", []):
+        if isinstance(item, str):
+            controller_id = item.strip()
+            if controller_id:
+                paired_entries.append(PairedController(controller_id=controller_id))
+            continue
+        if isinstance(item, dict):
+            controller_id = str(item.get("controller_id", "")).strip()
+            if controller_id:
+                hostname_value = item.get("hostname")
+                address_value = item.get("address")
+                paired_entries.append(
+                    PairedController(
+                        controller_id=controller_id,
+                        hostname=str(hostname_value).strip() if hostname_value not in (None, "") else None,
+                        address=str(address_value).strip() if address_value not in (None, "") else None,
+                    )
+                )
+    paired = tuple(paired_entries)
     if len(pair_code) != 8 or not pair_code.isdigit():
         pair_code = generate_pair_code()
         save_client_state(ClientState(pair_code=pair_code, paired_controllers=paired), target)
@@ -396,7 +433,7 @@ def save_client_state(state: ClientState, path: Path | None = None) -> Path:
     target.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "pair_code": state.pair_code,
-        "paired_controllers": list(state.paired_controllers),
+        "paired_controllers": [asdict(item) for item in state.paired_controllers],
         "updated_at": datetime.now(UTC).isoformat(),
     }
     target.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -413,7 +450,7 @@ def refresh_pair_code(path: Path | None = None) -> ClientState:
 
 def is_paired(controller_id: str, path: Path | None = None) -> bool:
     """Return True when this controller id is already paired."""
-    return controller_id in load_client_state(path).paired_controllers
+    return any(item.controller_id == controller_id for item in load_client_state(path).paired_controllers)
 
 
 def pair_controller(request: PairRequest, path: Path | None = None) -> bool:
@@ -421,7 +458,13 @@ def pair_controller(request: PairRequest, path: Path | None = None) -> bool:
     current = load_client_state(path)
     if request.code != current.pair_code:
         return False
-    paired = tuple(sorted(set(current.paired_controllers) | {request.controller_id}))
+    paired_by_id = {item.controller_id: item for item in current.paired_controllers}
+    paired_by_id[request.controller_id] = PairedController(
+        controller_id=request.controller_id,
+        hostname=request.hostname,
+        address=request.address,
+    )
+    paired = tuple(sorted(paired_by_id.values(), key=lambda item: item.controller_id))
     updated = ClientState(pair_code=generate_pair_code(), paired_controllers=paired)
     save_client_state(updated, path)
     return True

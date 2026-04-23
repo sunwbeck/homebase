@@ -9,7 +9,7 @@ import pytest
 from typer.testing import CliRunner
 
 from homebase_cli import cli as cli_module
-from homebase_cli.client import ClientProfile
+from homebase_cli.client import ClientProfile, ClientState, ConnectRuntime, PairedController
 from homebase_cli.selftest import SelfTestResult
 
 
@@ -214,7 +214,7 @@ def test_root_help_for_managed_hides_controller_only_commands(monkeypatch) -> No
         app = load_app(monkeypatch, "settings.toml")
         result = runner.invoke(app, ["--help"], env={"HOMEBASE_SETTINGS_PATH": "settings.toml"})
         assert result.exit_code == 0
-        assert "│ status" not in result.stdout
+        assert "│ status" in result.stdout
         assert "│ node " not in result.stdout
         assert "│ group" not in result.stdout
         assert "│ link " not in result.stdout
@@ -276,6 +276,73 @@ def test_status_shows_local_node(monkeypatch) -> None:
         assert "Node status" in status_result.stdout
         assert "control" in status_result.stdout
         assert "controller" in status_result.stdout
+
+
+def test_managed_status_shows_self_and_paired_controllers(monkeypatch) -> None:
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        env = {"HOMEBASE_SETTINGS_PATH": "settings.toml", "COLUMNS": "240"}
+        Path("settings.toml").write_text('role = "managed"\nnode_name = "app"\n', encoding="utf-8")
+        app = load_app(monkeypatch, "settings.toml")
+        monkeypatch.setattr(
+            "homebase_cli.cli.local_profile",
+            lambda: ClientProfile(
+                node_id="node-1",
+                hostname="app",
+                platform="Linux 6.1",
+                version="0.1.8",
+                open_ports=(22, 8080),
+                services=("ssh", "docker"),
+            ),
+        )
+        monkeypatch.setattr("homebase_cli.cli.detect_primary_address", lambda: "192.168.0.20")
+        monkeypatch.setattr("homebase_cli.cli.connect_server_running", lambda: None)
+        monkeypatch.setattr(
+            "homebase_cli.cli.load_client_state",
+            lambda: ClientState(
+                pair_code="12345678",
+                paired_controllers=(
+                    PairedController(
+                        controller_id="control-id",
+                        hostname="control",
+                        address="192.168.0.10",
+                    ),
+                ),
+            ),
+        )
+        result = runner.invoke(app, ["status"], env=env)
+        assert result.exit_code == 0
+        assert "app (local)" in result.stdout
+        assert "192.168.0.20" in result.stdout
+        assert "control" in result.stdout
+        assert "192.168.0.10" in result.stdout
+        assert "paired controller" in result.stdout
+
+
+def test_service_status_includes_local_identity(monkeypatch) -> None:
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        env = {"HOMEBASE_SETTINGS_PATH": "settings.toml", "COLUMNS": "240"}
+        Path("settings.toml").write_text('role = "managed"\nnode_name = "app"\n', encoding="utf-8")
+        app = load_app(monkeypatch, "settings.toml")
+        monkeypatch.setattr("homebase_cli.cli.detect_primary_address", lambda: "192.168.0.20")
+        monkeypatch.setattr("homebase_cli.cli.socket.gethostname", lambda: "app")
+        monkeypatch.setattr(
+            "homebase_cli.cli.connect_server_running",
+            lambda: ConnectRuntime(
+                pid=4321,
+                host="0.0.0.0",
+                port=8428,
+                started_at="2026-04-23T00:00:00Z",
+                log_path="/tmp/connect.log",
+            ),
+        )
+        result = runner.invoke(app, ["service", "status"], env=env)
+        assert result.exit_code == 0
+        assert "app" in result.stdout
+        assert "managed" in result.stdout
+        assert "192.168.0.20" in result.stdout
+        assert "0.0.0.0:8428" in result.stdout
 
 
 def test_node_edit_name_updates_local_node_name(monkeypatch) -> None:

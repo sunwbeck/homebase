@@ -22,6 +22,8 @@ from homebase_cli.client import (
     ClientDiscovery,
     ClientProfile,
     PairRequest,
+    detect_primary_address,
+    local_controller_hostname,
     local_controller_id,
     parse_discovery_payload,
     parse_profile_payload,
@@ -193,7 +195,12 @@ def pair_with_client(
     controller_id: str | None = None,
 ) -> ClientProfile | None:
     """Send one pair request and return the full client profile on success."""
-    request = PairRequest(controller_id=controller_id or local_controller_id(), code=code)
+    request = PairRequest(
+        controller_id=controller_id or local_controller_id(),
+        code=code,
+        hostname=local_controller_hostname(),
+        address=detect_primary_address(),
+    )
     payload = json.dumps(asdict(request))
     result = _http_request(
         "POST",
