@@ -94,17 +94,18 @@ Use object commands when you want to inspect or change one area directly.
 
 ```bash
 homebase role show
-homebase role set control
+homebase role edit control
 homebase node list
 homebase node show host.app
-homebase node rename host.app host.api
-homebase node set-role host.app managed
+homebase node edit host.app name host.api
+homebase node edit host.app role managed
 homebase node assign host.app app-tier
 homebase node unassign host.app app-tier
 homebase group list
 homebase group show app-tier
 homebase group add app-tier
-homebase group rename app-tier app-services
+homebase group edit app-tier name app-services
+homebase group edit app-services description "app workloads"
 homebase group remove app-tier
 homebase link list
 homebase link add host-node app-tier
@@ -115,10 +116,11 @@ Use `homebase inventory` when you want to inspect or edit the ansible-style YAML
 
 ```bash
 homebase inventory
-homebase inventory --open
+homebase inventory show
+homebase inventory edit
 ```
 
-`homebase inventory` refreshes the ansible YAML and prints the YAML contents. `homebase inventory --open` opens that YAML in your editor.
+`homebase inventory` and `homebase inventory show` refresh the ansible YAML and print the YAML contents. `homebase inventory edit` opens that YAML in your editor.
 
 `homebase state` stores simple key/value labels on registered nodes.
 

@@ -283,18 +283,11 @@ def _render_group_tree(name: str, index: dict[str, object], rows: list[tuple[str
 
 
 @inventory_app.callback()
-def inventory_callback(
-    ctx: typer.Context,
-    open_file: bool = typer.Option(False, "--open", help="Open the ansible inventory YAML file in $EDITOR."),
-) -> None:
-    """Show or open the ansible inventory YAML file."""
+def inventory_callback(ctx: typer.Context) -> None:
+    """Show the ansible inventory YAML when inventory is called directly."""
     if ctx.invoked_subcommand is not None:
         return
     _require_role("control")
-    if open_file:
-        target = open_ansible_inventory()
-        console.print(f"[green]Opened ansible inventory:[/green] {target}")
-        raise typer.Exit(code=0)
     target = write_ansible_inventory()
     console.print(f"[green]Inventory YAML:[/green] {target}")
     console.print(target.read_text(encoding="utf-8"))
@@ -704,11 +697,11 @@ def role_show_command() -> None:
     _print_local_role()
 
 
-@role_app.command("set")
-def role_set_command(
-    runtime_role: str = typer.Argument(..., help="control or managed."),
+@role_app.command("edit")
+def role_edit_command(
+    runtime_role: str = typer.Argument(..., help="New local role: control or managed."),
 ) -> None:
-    """Set the local role to control or managed."""
+    """Edit the local role."""
     _set_local_role(runtime_role)
 
 
@@ -735,73 +728,25 @@ def inventory_name_command(
     console.print(f"[green]Renamed node:[/green] {node.name} -> {renamed.name}")
 
 
-@node_app.command("rename")
-def node_rename_command(
+@node_app.command("edit")
+def node_edit_command(
     target: str = typer.Argument(..., help="Current node name."),
-    new_name: str = typer.Argument(..., help="New node name."),
+    field: str = typer.Argument(..., help="Field to edit: name or role."),
+    value: str = typer.Argument(..., help="New value."),
 ) -> None:
-    """Rename one registered node."""
-    inventory_name_command(target, edit=new_name)
-
-
-@inventory_app.command("type", hidden=True)
-def inventory_type_command(
-    target: str | None = typer.Argument(None, help="Optional node name. Defaults to the local node."),
-    edit: str | None = typer.Option(None, "--edit", help="New node type: control or managed."),
-) -> None:
-    """Show or edit one registered node type."""
-    _require_role("control")
-    resource = _resolve_inventory_node_target(target)
-    node = find_node(resource)
-    if node is None:
-        raise typer.BadParameter(f"unknown node: {resource}")
-    if edit is None:
-        console.print(node.runtime_role)
+    """Edit one registered node."""
+    normalized = field.strip().lower()
+    if normalized == "name":
+        inventory_name_command(target, edit=value)
         return
-    try:
-        updated = set_node_runtime_role(resource, edit)
-    except ValueError as exc:
-        raise typer.BadParameter(str(exc)) from exc
-    console.print(f"[green]Set node type:[/green] {updated.name} -> {updated.runtime_role}")
-
-
-@node_app.command("set-role")
-def node_set_role_command(
-    target: str = typer.Argument(..., help="Node name."),
-    runtime_role: str = typer.Argument(..., help="control or managed."),
-) -> None:
-    """Set one registered node role to control or managed."""
-    inventory_type_command(target, edit=runtime_role)
-
-
-@inventory_app.command("group", hidden=True)
-def inventory_group_command(
-    add: str | None = typer.Option(None, "--add", help="Add one group."),
-    remove: str | None = typer.Option(None, "--remove", help="Remove one group."),
-    edit: str | None = typer.Option(None, "--edit", help="Edit one existing group."),
-    description: str | None = typer.Option(None, "--description", help="Group description when adding or editing."),
-) -> None:
-    """Add, remove, or edit one group."""
-    _require_role("control")
-    action_count = _count_actions(add, remove, edit)
-    if action_count != 1:
-        raise typer.BadParameter("choose exactly one action: --add, --remove, or --edit")
-    try:
-        if add is not None:
-            group = add_role_group(name=add, description=description or "")
-            console.print(f"[green]Added group:[/green] {group.name}")
-            return
-        if remove is not None:
-            remove_role_group(remove)
-            console.print(f"[green]Removed group:[/green] {remove.strip().lower()}")
-            return
-        assert edit is not None
-        updated_name = edit.strip()
-        if description is not None:
-            updated_name = set_role_group_description(updated_name, description).name
-        console.print(f"[green]Updated group:[/green] {updated_name}")
-    except ValueError as exc:
-        raise typer.BadParameter(str(exc)) from exc
+    if normalized == "role":
+        try:
+            updated = set_node_runtime_role(target, value)
+        except ValueError as exc:
+            raise typer.BadParameter(str(exc)) from exc
+        console.print(f"[green]Set node type:[/green] {updated.name} -> {updated.runtime_role}")
+        return
+    raise typer.BadParameter("node edit field must be one of: name, role")
 
 
 @group_app.command("list")
@@ -835,28 +780,45 @@ def group_show_command(group: str = typer.Argument(..., help="Group name.")) -> 
 def group_add_command(group: str = typer.Argument(..., help="New group name.")) -> None:
     """Add one group."""
     _require_role("control")
-    inventory_group_command(add=group, remove=None, edit=None, description=None)
-
-
-@group_app.command("rename")
-def group_rename_command(
-    group: str = typer.Argument(..., help="Current group name."),
-    new_name: str = typer.Argument(..., help="New group name."),
-) -> None:
-    """Rename one group."""
-    _require_role("control")
     try:
-        updated = rename_role_group(group, new_name)
+        created = add_role_group(name=group, description="")
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
-    console.print(f"[green]Renamed group:[/green] {group} -> {updated.name}")
+    console.print(f"[green]Added group:[/green] {created.name}")
+
+
+@group_app.command("edit")
+def group_edit_command(
+    group: str = typer.Argument(..., help="Current group name."),
+    field: str = typer.Argument(..., help="Field to edit: name or description."),
+    value: str = typer.Argument(..., help="New value."),
+) -> None:
+    """Edit one group."""
+    _require_role("control")
+    normalized = field.strip().lower()
+    try:
+        if normalized == "name":
+            updated = rename_role_group(group, value)
+            console.print(f"[green]Renamed group:[/green] {group} -> {updated.name}")
+            return
+        if normalized == "description":
+            updated = set_role_group_description(group, value)
+            console.print(f"[green]Updated group description:[/green] {updated.name}")
+            return
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    raise typer.BadParameter("group edit field must be one of: name, description")
 
 
 @group_app.command("remove")
 def group_remove_command(group: str = typer.Argument(..., help="Group name.")) -> None:
     """Remove one group."""
     _require_role("control")
-    inventory_group_command(add=None, remove=group, edit=None, description=None)
+    try:
+        remove_role_group(group)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    console.print(f"[green]Removed group:[/green] {group.strip().lower()}")
 
 
 @inventory_app.command("link", hidden=True)
@@ -960,19 +922,21 @@ def node_unassign_command(
     inventory_assign_command(node, group, add=False, remove=True)
 
 
-@inventory_app.command("file", hidden=True)
-def inventory_file_command(
-    open_file: bool = typer.Option(False, "--open", help="Open the ansible inventory YAML file in $EDITOR after writing it."),
-) -> None:
-    """Show or open the ansible inventory YAML file."""
+@inventory_app.command("show")
+def inventory_show_command() -> None:
+    """Show the ansible inventory YAML."""
     _require_role("control")
-    if open_file:
-        target = open_ansible_inventory()
-        console.print(f"[green]Opened ansible inventory:[/green] {target}")
-        return
     target = write_ansible_inventory()
     console.print(f"[green]Inventory YAML:[/green] {target}")
     console.print(target.read_text(encoding="utf-8"))
+
+
+@inventory_app.command("edit")
+def inventory_edit_command() -> None:
+    """Open the ansible inventory YAML in the configured editor."""
+    _require_role("control")
+    target = open_ansible_inventory()
+    console.print(f"[green]Opened ansible inventory:[/green] {target}")
 
 
 @state_app.command("show")
@@ -1286,8 +1250,7 @@ def _build_node_app() -> typer.Typer:
     runtime_node_app = typer.Typer(help="Inspect and manage registered nodes.")
     runtime_node_app.command("list")(node_list_command)
     runtime_node_app.command("show")(node_show_command)
-    runtime_node_app.command("rename")(node_rename_command)
-    runtime_node_app.command("set-role")(node_set_role_command)
+    runtime_node_app.command("edit")(node_edit_command)
     runtime_node_app.command("assign")(node_assign_command)
     runtime_node_app.command("unassign")(node_unassign_command)
     return runtime_node_app
@@ -1305,7 +1268,7 @@ def _build_group_app() -> typer.Typer:
     runtime_group_app.command("list")(group_list_command)
     runtime_group_app.command("show")(group_show_command)
     runtime_group_app.command("add")(group_add_command)
-    runtime_group_app.command("rename")(group_rename_command)
+    runtime_group_app.command("edit")(group_edit_command)
     runtime_group_app.command("remove")(group_remove_command)
     return runtime_group_app
 
@@ -1321,7 +1284,7 @@ def _build_link_app() -> typer.Typer:
 def _build_role_app() -> typer.Typer:
     runtime_role_app = typer.Typer(help="Show or change the local role: control or managed.")
     runtime_role_app.command("show")(role_show_command)
-    runtime_role_app.command("set")(role_set_command)
+    runtime_role_app.command("edit")(role_edit_command)
     return runtime_role_app
 
 
@@ -1353,13 +1316,13 @@ def _build_root_app() -> typer.Typer:
     current_role = _current_runtime_role()
     if current_role in (None, "control"):
         runtime_app.command("status")(status_command)
-        runtime_app.add_typer(inventory_app, name="inventory")
         runtime_app.add_typer(_build_role_app(), name="role")
-        runtime_app.add_typer(_build_connect_app(), name="connect")
-        runtime_app.add_typer(state_app, name="state")
         runtime_app.add_typer(_build_node_app(), name="node")
         runtime_app.add_typer(_build_group_app(), name="group")
         runtime_app.add_typer(_build_link_app(), name="link")
+        runtime_app.add_typer(inventory_app, name="inventory")
+        runtime_app.add_typer(_build_connect_app(), name="connect")
+        runtime_app.add_typer(state_app, name="state")
     if current_role in (None, "managed"):
         runtime_app.add_typer(_build_client_app(), name="client")
     runtime_app.add_typer(_build_package_app(), name="package")
