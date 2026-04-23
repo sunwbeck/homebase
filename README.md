@@ -17,13 +17,13 @@ What it does:
 First install:
 
 ```bash
-tmpdir="$(mktemp -d)" && curl -fsSL https://github.com/sunwbeck/homebase/archive/refs/heads/main.tar.gz | tar -xzf - -C "$tmpdir" && bash "$tmpdir"/homebase-main/scripts/install-homebase.sh && rm -rf "$tmpdir"
+curl -fsSL https://raw.githubusercontent.com/sunwbeck/homebase/main/scripts/install-homebase.sh | bash
 ```
 
 Install a specific ref:
 
 ```bash
-ref="main"; tmpdir="$(mktemp -d)" && curl -fsSL "https://github.com/sunwbeck/homebase/archive/${ref}.tar.gz" | tar -xzf - -C "$tmpdir" && bash "$tmpdir"/homebase-"${ref}"/scripts/install-homebase.sh --ref "${ref}" && rm -rf "$tmpdir"
+curl -fsSL https://raw.githubusercontent.com/sunwbeck/homebase/main/scripts/install-homebase.sh | bash -s -- --ref main
 ```
 
 The installer sets up `homebase` for the current user and makes `homebase` and `hb` available from `~/.local/bin`.
