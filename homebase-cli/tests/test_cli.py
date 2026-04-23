@@ -381,6 +381,10 @@ def test_service_list_shows_local_services(monkeypatch) -> None:
             "homebase_cli.cli.find_node",
             lambda name: SimpleNamespace(
                 name="app",
+                address="192.168.0.20",
+                runtime_hostname="app",
+                platform="Linux 6.1",
+                open_ports=(22, 8428),
                 services=("ssh", "docker"),
                 exposed_endpoints=((22, "ssh", "sshd"), (8428, "homebase", "python")),
             ),
@@ -389,10 +393,68 @@ def test_service_list_shows_local_services(monkeypatch) -> None:
         monkeypatch.setattr("homebase_cli.cli.detect_exposed_endpoints", lambda: ((22, "ssh", "sshd"), (8428, "homebase", "python")))
         result = runner.invoke(app, ["service", "list"], env=env)
         assert result.exit_code == 0
-        assert "Services" in result.stdout
-        assert "Exposure" in result.stdout
-        assert "ssh, docker" in result.stdout
-        assert "ssh:22, homebase:8428" in result.stdout
+        assert "Service" in result.stdout
+        assert "Port" in result.stdout
+        assert "Owner" in result.stdout
+        assert "192.168.0.20" in result.stdout
+        assert "ssh" in result.stdout
+        assert "8428" in result.stdout
+        assert "python" in result.stdout
+
+
+def test_service_list_marks_nodes_without_endpoints(monkeypatch) -> None:
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        env = {"HOMEBASE_SETTINGS_PATH": "settings.toml", "HOMEBASE_REGISTRY_PATH": "nodes.toml", "COLUMNS": "240"}
+        Path("settings.toml").write_text('role = "controller"\nnode_name = "control"\n', encoding="utf-8")
+        Path("nodes.toml").write_text(
+            '[[nodes]]\nname = "app"\nkind = "vm"\nruntime_role = "managed"\nruntime_hostname = "app"\n',
+            encoding="utf-8",
+        )
+        app = load_app(monkeypatch, "settings.toml")
+        result = runner.invoke(app, ["service", "list"], env=env)
+        assert result.exit_code == 0
+        assert "none" in result.stdout
+
+
+def test_service_show_uses_runtime_address(monkeypatch) -> None:
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        env = {"HOMEBASE_SETTINGS_PATH": "settings.toml", "HOMEBASE_REGISTRY_PATH": "nodes.toml", "COLUMNS": "240"}
+        Path("settings.toml").write_text('role = "controller"\nnode_name = "control"\n', encoding="utf-8")
+        Path("nodes.toml").write_text(
+            '\n'.join(
+                [
+                    '[[nodes]]',
+                    'name = "control"',
+                    'kind = "controller"',
+                    'runtime_role = "controller"',
+                    'runtime_hostname = "control"',
+                    'description = "main controller"',
+                    '',
+                ]
+            ),
+            encoding="utf-8",
+        )
+        app = load_app(monkeypatch, "settings.toml")
+        monkeypatch.setattr("homebase_cli.cli.detect_primary_address", lambda: "192.168.0.10")
+        monkeypatch.setattr(
+            "homebase_cli.cli.local_profile",
+            lambda: ClientProfile(
+                node_id="node-1",
+                hostname="control",
+                platform="Linux 6.1",
+                version="0.1.15",
+                services=("ssh", "homebase"),
+            ),
+        )
+        monkeypatch.setattr("homebase_cli.cli.detect_running_services", lambda: ("ssh", "homebase", "caddy"))
+        monkeypatch.setattr("homebase_cli.cli.detect_exposed_endpoints", lambda: ((22, "ssh", "sshd"), (8428, "homebase", "python")))
+        result = runner.invoke(app, ["service", "show", "control"], env=env)
+        assert result.exit_code == 0
+        assert "address" in result.stdout
+        assert "192.168.0.10" in result.stdout
+        assert "22 -> ssh (sshd)" in result.stdout
 
 
 def test_node_edit_name_updates_local_node_name(monkeypatch) -> None:
