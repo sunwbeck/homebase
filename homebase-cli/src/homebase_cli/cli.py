@@ -15,6 +15,7 @@ from rich.console import Console
 
 from homebase_cli.client import (
     DEFAULT_CLIENT_PORT,
+    detect_primary_address,
     discovery_payload,
     local_profile,
     load_client_state,
@@ -205,14 +206,15 @@ def _show_node_details(node_name: str) -> None:
     platform_value = node.platform or (local_profile_data.platform if local_profile_data is not None else None)
     open_ports = node.open_ports or (local_profile_data.open_ports if local_profile_data is not None else ())
     services = node.services or (local_profile_data.services if local_profile_data is not None else ())
+    address_value = node.address or (detect_primary_address() if local_profile_data is not None else None)
     console.print(f"[bold]Node: {node.name}[/bold]")
     console.print(f"role: {node.runtime_role}")
     console.print(f"groups: {', '.join(node.role_groups) if node.role_groups else 'none'}")
     if node.parent:
         console.print(f"parent: {node.parent}")
     console.print(f"class: {node.kind}")
-    if node.address:
-        console.print(f"address: {node.address}")
+    if address_value:
+        console.print(f"address: {address_value}")
     if node.runtime_hostname:
         console.print(f"hostname: {node.runtime_hostname}")
     if platform_value:
@@ -278,7 +280,7 @@ def _print_registered_overview() -> None:
             table.add_row(
                 label,
                 node.runtime_role,
-                node.address or "",
+                node.address or (detect_primary_address() if local_profile_data is not None else ""),
                 node.runtime_hostname or (local_profile_data.hostname if local_profile_data is not None else ""),
                 node.platform or (local_profile_data.platform if local_profile_data is not None else ""),
                 ", ".join(str(port) for port in (node.open_ports or (local_profile_data.open_ports if local_profile_data is not None else ()))),

@@ -105,6 +105,52 @@ def local_controller_id() -> str:
     return machine_id if machine_id else hostname
 
 
+def detect_primary_address() -> str | None:
+    """Return one likely primary local IPv4 address."""
+    try:
+        probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            probe.connect(("1.1.1.1", 80))
+            address = probe.getsockname()[0].strip()
+        finally:
+            probe.close()
+        if address and not address.startswith("127."):
+            return address
+    except OSError:
+        pass
+    try:
+        address = socket.gethostbyname(socket.gethostname()).strip()
+    except OSError:
+        address = ""
+    if address and not address.startswith("127."):
+        return address
+    for command in (["ip", "-4", "-br", "addr"], ["/usr/sbin/ip", "-4", "-br", "addr"]):
+        try:
+            proc = subprocess.run(
+                command,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+        except OSError:
+            continue
+        if proc.returncode != 0:
+            continue
+        for line in proc.stdout.splitlines():
+            parts = line.split()
+            if len(parts) < 3:
+                continue
+            iface = parts[0].strip()
+            if iface == "lo":
+                continue
+            for token in parts[2:]:
+                candidate, _, _ = token.partition("/")
+                candidate = candidate.strip()
+                if candidate and not candidate.startswith("127."):
+                    return candidate
+    return None
+
+
 def detect_open_ports() -> tuple[int, ...]:
     """Return locally listening TCP ports when available."""
     proc = subprocess.run(
