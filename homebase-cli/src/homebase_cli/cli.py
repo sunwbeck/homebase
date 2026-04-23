@@ -50,20 +50,15 @@ from homebase_cli.selftest import run_client_self_test
 from homebase_cli.settings import add_role, list_roles, load_settings, remove_role, set_role
 
 
-app = typer.Typer(no_args_is_help=True, help="Read and inspect the NAS-backed homebase docs.")
-node_app = typer.Typer(help="Register and inspect real nodes stored in the local registry.")
-ansible_app = typer.Typer(help="Generate inventory and run small ansible actions against registered nodes.")
-client_app = typer.Typer(help="Run the homebase client identity endpoint on one node.")
+app = typer.Typer(no_args_is_help=True, help="Manage homebase control and client nodes.")
+node_app = typer.Typer(help="Scan for clients and inspect registered nodes.")
+ansible_app = typer.Typer(help="Run ansible-related helper commands.")
+client_app = typer.Typer(help="Run the homebase client service on one managed node.")
 package_app = typer.Typer(
     invoke_without_command=True,
-    help="Inspect GitHub versions and install or update homebase from GitHub refs.",
+    help="Check installed homebase revisions and install or update from GitHub.",
 )
-dev_app = typer.Typer(help="Run local development validation commands.")
-app.add_typer(node_app, name="node")
-app.add_typer(ansible_app, name="ansible")
-app.add_typer(client_app, name="client")
-app.add_typer(package_app, name="package")
-app.add_typer(dev_app, name="dev")
+dev_app = typer.Typer(help="Development and internal commands.")
 console = Console()
 DEFAULT_KIND_CHOICES = ("control", "workstation", "host", "vm", "node")
 
@@ -736,6 +731,63 @@ def dev_self_test_command() -> None:
     console.print(f"hostname: {result.hostname}")
     console.print(f"platform: {result.platform}")
     console.print(f"version: {result.version}")
+
+
+def _build_client_app() -> typer.Typer:
+    runtime_client_app = typer.Typer(help="Run the homebase client service on one managed node.")
+    runtime_client_app.command("code")(client_code_command)
+    runtime_client_app.command("serve")(client_serve_command)
+    runtime_client_app.command("profile", hidden=True)(client_profile_command)
+    runtime_client_app.command("identity", hidden=True)(client_identity_command)
+    return runtime_client_app
+
+
+def _build_node_app() -> typer.Typer:
+    runtime_node_app = typer.Typer(help="Scan for clients and inspect registered nodes.")
+    runtime_node_app.command("scan")(node_scan_command)
+    runtime_node_app.command("add")(node_add_command)
+    runtime_node_app.command("status")(status_command)
+    runtime_node_app.command("ls")(ls_command)
+    runtime_node_app.command("info")(info_command)
+    runtime_node_app.command("tree", hidden=True)(node_status_command)
+    return runtime_node_app
+
+
+def _build_package_app() -> typer.Typer:
+    runtime_package_app = typer.Typer(
+        invoke_without_command=True,
+        help="Check installed homebase revisions and install or update from GitHub.",
+    )
+    runtime_package_app.callback()(package_callback)
+    runtime_package_app.command("status")(package_status_command)
+    runtime_package_app.command("versions")(package_versions_command)
+    runtime_package_app.command("version", hidden=True)(package_version_command)
+    runtime_package_app.command("update")(package_update_command)
+    runtime_package_app.command("install")(package_install_command)
+    return runtime_package_app
+
+
+def _build_dev_app() -> typer.Typer:
+    runtime_dev_app = typer.Typer(help="Development and internal commands.")
+    runtime_dev_app.command("self-test")(dev_self_test_command)
+    runtime_dev_app.command("docs")(docs_command)
+    runtime_dev_app.add_typer(ansible_app, name="ansible")
+    return runtime_dev_app
+
+
+def _build_root_app() -> typer.Typer:
+    runtime_app = typer.Typer(no_args_is_help=True, help="Manage homebase control and client nodes.")
+    runtime_app.command("init")(init_command)
+    runtime_app.command("role")(role_command)
+    runtime_app.command("roles")(roles_command)
+    runtime_app.add_typer(_build_client_app(), name="client")
+    runtime_app.add_typer(_build_node_app(), name="node")
+    runtime_app.add_typer(_build_package_app(), name="package")
+    runtime_app.add_typer(_build_dev_app(), name="dev")
+    return runtime_app
+
+
+app = _build_root_app()
 
 
 def main() -> None:

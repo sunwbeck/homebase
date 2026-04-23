@@ -316,6 +316,68 @@ def test_package_update_remote_requests_update(monkeypatch) -> None:
         assert "requested ref: v0.1.2" in result.stdout
 
 
+def test_root_help_uses_workflow_order() -> None:
+    runner = CliRunner()
+    result = runner.invoke(app, ["--help"])
+    assert result.exit_code == 0
+    output = result.stdout
+    command_lines = [line for line in output.splitlines() if line.strip().startswith(("│ init", "│ role", "│ roles", "│ client", "│ node", "│ package", "│ dev"))]
+    assert command_lines == [
+        "│ init      Initialize the local node role for this homebase installation.     │",
+        "│ role      Show or update the local node role.                                │",
+        "│ roles     List, add, or remove selectable local roles.                       │",
+        "│ client    Run the homebase client service on one managed node.               │",
+        "│ node      Scan for clients and inspect registered nodes.                     │",
+        "│ package   Check installed homebase revisions and install or update from      │",
+        "│ dev       Development and internal commands.                                 │",
+    ]
+    assert "docs" not in output
+    assert "ansible" not in output
+    assert "status" not in output
+    assert " ls " not in output
+    assert " info " not in output
+
+
+def test_package_help_uses_workflow_order() -> None:
+    runner = CliRunner()
+    result = runner.invoke(app, ["package", "--help"])
+    assert result.exit_code == 0
+    output = result.stdout
+    command_lines = [line for line in output.splitlines() if line.strip().startswith(("│ status", "│ versions", "│ update", "│ install"))]
+    assert command_lines == [
+        "│ status     Show the currently installed homebase revision on this node or    │",
+        "│ versions   List installable GitHub refs with short release notes.            │",
+        "│ update     Update to the latest GitHub release, or default branch when no    │",
+        "│ install    Install one GitHub ref, or choose a version interactively.        │",
+    ]
+    assert "upgrade" not in output
+
+
+def test_dev_help_includes_internal_commands() -> None:
+    runner = CliRunner()
+    result = runner.invoke(app, ["dev", "--help"])
+    assert result.exit_code == 0
+    output = result.stdout
+    assert "self-test" in output
+    assert "docs" in output
+    assert "ansible" in output
+
+
+def test_node_help_uses_registry_workflow_order() -> None:
+    runner = CliRunner()
+    result = runner.invoke(app, ["node", "--help"])
+    assert result.exit_code == 0
+    output = result.stdout
+    command_lines = [line for line in output.splitlines() if line.strip().startswith(("│ scan", "│ add", "│ status", "│ ls", "│ info"))]
+    assert command_lines == [
+        "│ scan     Scan a local network for homebase clients and update the discovery  │",
+        "│ add      Add one node to the persistent local registry, preferably from      │",
+        "│ status   Show currently registered nodes.                                    │",
+        "│ ls       List top-level or child resources.                                  │",
+        "│ info     Show high-level information for a resource.                         │",
+    ]
+
+
 def test_client_commands_require_client_role() -> None:
     runner = CliRunner()
     with runner.isolated_filesystem():
