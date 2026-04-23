@@ -504,26 +504,27 @@ def _run_package_batch(
         return []
     rows: dict[str, tuple[str, ...]] = {}
     max_workers = min(8, max(1, len(selected_nodes)))
-    progress = Progress(
-        SpinnerColumn(),
-        TextColumn("{task.description}"),
-        TimeElapsedColumn(),
-        console=console,
-    )
+    progress = _package_progress()
     with progress:
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             future_map = {}
             for node in selected_nodes:
-                task_id = progress.add_task(f"{description_prefix}: {node.name} (running)", total=None)
+                task_id = progress.add_task(
+                    f"{description_prefix}: {node.name} (1/4 queued)",
+                    total=4,
+                    completed=1,
+                )
                 future = executor.submit(worker, node)
+                progress.update(task_id, completed=2, description=f"{description_prefix}: {node.name} (2/4 dispatched)")
                 future_map[future] = (node, task_id)
             while future_map:
                 finished = []
                 for future, (node, task_id) in list(future_map.items()):
                     if future.done():
                         payload = future.result()
+                        progress.update(task_id, completed=3, description=f"{description_prefix}: {node.name} (3/4 response received)")
                         rows[node.name] = row_builder(node, payload)
-                        progress.update(task_id, description=f"{description_prefix}: {node.name} (done)")
+                        progress.update(task_id, completed=4, description=f"{description_prefix}: {node.name} (4/4 recorded)")
                         finished.append(future)
                 for future in finished:
                     del future_map[future]
