@@ -534,6 +534,21 @@ def ensure_local_node(
     if not normalized_name:
         raise ValueError("node name cannot be empty")
     nodes = load_nodes(path)
+    normalized_hostname = runtime_hostname.strip() if runtime_hostname else None
+    normalized_role = normalize_node_runtime_role(runtime_role)
+    stale_local_names = {
+        node.name
+        for node in nodes
+        if node.name != normalized_name
+        and normalized_hostname is not None
+        and node.runtime_hostname == normalized_hostname
+        and node.address is None
+        and node.node_id is None
+    }
+    if stale_local_names:
+        nodes = tuple(node for node in nodes if node.name not in stale_local_names)
+        save_nodes(nodes, path)
+        nodes = load_nodes(path)
     previous = None
     if previous_name:
         previous = next((node for node in nodes if node.name == previous_name.strip()), None)
@@ -548,7 +563,7 @@ def ensure_local_node(
         nodes = load_nodes(path)
         existing = next((node for node in nodes if node.name == normalized_name), None)
     if existing is None:
-        kind = "controller" if normalize_node_runtime_role(runtime_role) == "controller" else "node"
+        kind = "controller" if normalized_role == "controller" else "node"
         return add_node(
             name=normalized_name,
             kind=kind,
@@ -574,7 +589,7 @@ def ensure_local_node(
         updated = Node(
             name=node.name,
             parent=node.parent,
-            kind="controller" if normalize_node_runtime_role(runtime_role) == "controller" else node.kind,
+            kind="controller" if normalized_role == "controller" else "node",
             runtime_role=normalize_node_runtime_role(runtime_role, kind=node.kind),
             address=address or node.address,
             ssh_user=node.ssh_user,

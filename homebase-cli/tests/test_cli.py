@@ -381,6 +381,39 @@ def test_package_install_supports_group_selection(monkeypatch) -> None:
     assert "Start with:" not in result.stdout
 
 
+def test_node_list_prunes_stale_local_entries(monkeypatch) -> None:
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        env = {"HOMEBASE_SETTINGS_PATH": "settings.toml", "HOMEBASE_REGISTRY_PATH": "nodes.toml", "COLUMNS": "240"}
+        Path("settings.toml").write_text('role = "controller"\nnode_name = "control"\n', encoding="utf-8")
+        Path("nodes.toml").write_text(
+            '[[nodes]]\nname = "app"\nkind = "controller"\nruntime_role = "managed"\nruntime_hostname = "control"\n'
+            '\n[[nodes]]\nname = "control"\nkind = "controller"\nruntime_role = "controller"\nruntime_hostname = "control"\n',
+            encoding="utf-8",
+        )
+        app = load_app(monkeypatch, "settings.toml")
+        monkeypatch.setattr(
+            "homebase_cli.cli.local_profile",
+            lambda: SimpleNamespace(
+                hostname="control",
+                node_name="control",
+                description="",
+                node_id="",
+                platform="Linux",
+                open_ports=(),
+                services=(),
+                exposed_endpoints=(),
+                endpoint_records=(),
+                service_records=(),
+            ),
+        )
+        monkeypatch.setattr("homebase_cli.cli.detect_primary_address", lambda: "192.168.0.10")
+        result = runner.invoke(app, ["node", "list"], env=env)
+        assert result.exit_code == 0
+        assert "app" not in result.stdout
+        assert "control" in result.stdout
+
+
 def test_root_help_for_managed_hides_controller_only_commands(monkeypatch) -> None:
     runner = CliRunner()
     with runner.isolated_filesystem():

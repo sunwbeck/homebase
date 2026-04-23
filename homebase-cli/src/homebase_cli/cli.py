@@ -337,25 +337,25 @@ def _inventory_nodes():
     nodes = list(load_nodes())
     current_name = _current_node_name()
     current_role = _current_runtime_role()
-    if current_name and current_role and not any(node.name == current_name for node in nodes):
+    if current_name and current_role:
         try:
             profile = local_profile()
-            nodes.append(
-                ensure_local_node(
-                    current_name,
-                    current_role,
-                    runtime_hostname=profile.hostname,
-                    address=detect_primary_address() or None,
-                    platform=profile.platform,
-                    client_port=DEFAULT_CLIENT_PORT,
-                    open_ports=profile.open_ports,
-                    services=profile.services,
-                    exposed_endpoints=profile.exposed_endpoints,
-                    endpoint_records=profile.endpoint_records,
-                )
+            local_node = ensure_local_node(
+                current_name,
+                current_role,
+                runtime_hostname=profile.hostname,
+                address=detect_primary_address() or None,
+                platform=profile.platform,
+                client_port=DEFAULT_CLIENT_PORT,
+                open_ports=profile.open_ports,
+                services=profile.services,
+                exposed_endpoints=profile.exposed_endpoints,
+                endpoint_records=profile.endpoint_records,
             )
         except Exception:
-            nodes.append(ensure_local_node(current_name, current_role, runtime_hostname=socket.gethostname()))
+            local_node = ensure_local_node(current_name, current_role, runtime_hostname=socket.gethostname())
+        nodes = [node for node in load_nodes() if node.name != local_node.name]
+        nodes.append(local_node)
     return tuple(sorted(nodes, key=lambda item: item.name))
 
 
@@ -478,6 +478,17 @@ def _local_package_status_payload() -> dict[str, object]:
         "summary": current.summary,
         "installed_at": current.installed_at,
     }
+
+
+def _package_progress():
+    """Build one progress renderer for package batch operations."""
+    return Progress(
+        SpinnerColumn(),
+        TextColumn("{task.description}"),
+        BarColumn(),
+        TaskProgressColumn(),
+        console=console,
+    )
 
 
 def _choose_runtime_role() -> str:
@@ -1948,31 +1959,35 @@ def package_status_command(
         table.add_column("Summary")
         table.add_column("Installed At")
         table.add_column("Result")
-        for node in selected_nodes:
-            is_local = bool(current_name and node.name == current_name)
-            if is_local:
-                payload = _local_package_status_payload()
-                address_value = detect_primary_address() or ""
-                result_value = "ok"
-            else:
-                if not node.address:
-                    payload = None
-                    address_value = ""
-                    result_value = "no address"
+        with _package_progress() as progress:
+            task = progress.add_task("Checking package status", total=len(selected_nodes))
+            for node in selected_nodes:
+                progress.update(task, description=f"Checking package status: {node.name}")
+                is_local = bool(current_name and node.name == current_name)
+                if is_local:
+                    payload = _local_package_status_payload()
+                    address_value = detect_primary_address() or ""
+                    result_value = "ok"
                 else:
-                    payload = fetch_package_status(node.address, port=node.client_port or DEFAULT_CLIENT_PORT)
-                    address_value = node.address
-                    result_value = "ok" if payload is not None else "no response"
-            table.add_row(
-                _node_label(node.name),
-                address_value,
-                str((payload or {}).get("installed_version") or "not installed"),
-                str((payload or {}).get("requested_ref") or ""),
-                str((payload or {}).get("resolved_ref") or ""),
-                str((payload or {}).get("summary") or ""),
-                str((payload or {}).get("installed_at") or ""),
-                result_value,
-            )
+                    if not node.address:
+                        payload = None
+                        address_value = ""
+                        result_value = "no address"
+                    else:
+                        payload = fetch_package_status(node.address, port=node.client_port or DEFAULT_CLIENT_PORT)
+                        address_value = node.address
+                        result_value = "ok" if payload is not None else "no response"
+                table.add_row(
+                    _node_label(node.name),
+                    address_value,
+                    str((payload or {}).get("installed_version") or "not installed"),
+                    str((payload or {}).get("requested_ref") or ""),
+                    str((payload or {}).get("resolved_ref") or ""),
+                    str((payload or {}).get("summary") or ""),
+                    str((payload or {}).get("installed_at") or ""),
+                    result_value,
+                )
+                progress.advance(task)
         console.print(table)
         return
     current = load_install_state()
@@ -2120,49 +2135,53 @@ def package_install_command(
         table.add_column("Requested")
         table.add_column("Resolved")
         table.add_column("Result")
-        for node in selected_nodes:
-            is_local = bool(current_name and node.name == current_name)
-            if is_local:
-                try:
-                    _, status = install_github_ref(
-                        selected_ref,
-                        repo_url=repo_url,
-                        python_bin=python_bin,
-                        summary=selected_summary,
-                    )
-                    result_value = "ok"
-                    payload = {
-                        "installed_version": status.installed_version,
-                        "requested_ref": status.requested_ref,
-                        "resolved_ref": status.resolved_ref,
-                    }
-                except PackageOperationError as exc:
-                    result_value = f"log: {exc.log_path}"
-                    payload = None
-                address_value = detect_primary_address() or ""
-            else:
-                if not node.address:
-                    payload = None
-                    address_value = ""
-                    result_value = "no address"
+        with _package_progress() as progress:
+            task = progress.add_task("Installing selected ref", total=len(selected_nodes))
+            for node in selected_nodes:
+                progress.update(task, description=f"Installing on {node.name}")
+                is_local = bool(current_name and node.name == current_name)
+                if is_local:
+                    try:
+                        _, status = install_github_ref(
+                            selected_ref,
+                            repo_url=repo_url,
+                            python_bin=python_bin,
+                            summary=selected_summary,
+                        )
+                        result_value = "ok"
+                        payload = {
+                            "installed_version": status.installed_version,
+                            "requested_ref": status.requested_ref,
+                            "resolved_ref": status.resolved_ref,
+                        }
+                    except PackageOperationError as exc:
+                        result_value = f"log: {exc.log_path}"
+                        payload = None
+                    address_value = detect_primary_address() or ""
                 else:
-                    payload = request_package_install(
-                        node.address,
-                        ref=selected_ref,
-                        repo_url=repo_url,
-                        summary=selected_summary,
-                        port=node.client_port or DEFAULT_CLIENT_PORT,
-                    )
-                    address_value = node.address
-                    result_value = "ok" if payload is not None else "no response"
-            table.add_row(
-                _node_label(node.name),
-                address_value,
-                str((payload or {}).get("installed_version") or "unknown"),
-                str((payload or {}).get("requested_ref") or selected_ref),
-                str((payload or {}).get("resolved_ref") or ""),
-                result_value,
-            )
+                    if not node.address:
+                        payload = None
+                        address_value = ""
+                        result_value = "no address"
+                    else:
+                        payload = request_package_install(
+                            node.address,
+                            ref=selected_ref,
+                            repo_url=repo_url,
+                            summary=selected_summary,
+                            port=node.client_port or DEFAULT_CLIENT_PORT,
+                        )
+                        address_value = node.address
+                        result_value = "ok" if payload is not None else "no response"
+                table.add_row(
+                    _node_label(node.name),
+                    address_value,
+                    str((payload or {}).get("installed_version") or "unknown"),
+                    str((payload or {}).get("requested_ref") or selected_ref),
+                    str((payload or {}).get("resolved_ref") or ""),
+                    result_value,
+                )
+                progress.advance(task)
         console.print(table)
         return
     _run_install_flow(ref=selected_ref, repo_url=repo_url, python_bin=python_bin, summary=selected_summary)
@@ -2195,48 +2214,52 @@ def package_update_command(
         table.add_column("Requested")
         table.add_column("Resolved")
         table.add_column("Result")
-        for node in selected_nodes:
-            is_local = bool(current_name and node.name == current_name)
-            if is_local:
-                try:
-                    _, status = install_github_ref(
-                        latest.ref,
-                        repo_url=repo_url,
-                        python_bin=python_bin,
-                        summary=latest.summary,
-                    )
-                    payload = {
-                        "installed_version": status.installed_version,
-                        "requested_ref": status.requested_ref,
-                        "resolved_ref": status.resolved_ref,
-                    }
-                    result_value = "ok"
-                except PackageOperationError as exc:
-                    payload = None
-                    result_value = f"log: {exc.log_path}"
-                address_value = detect_primary_address() or ""
-            else:
-                if not node.address:
-                    payload = None
-                    address_value = ""
-                    result_value = "no address"
+        with _package_progress() as progress:
+            task = progress.add_task("Updating selected nodes", total=len(selected_nodes))
+            for node in selected_nodes:
+                progress.update(task, description=f"Updating {node.name}")
+                is_local = bool(current_name and node.name == current_name)
+                if is_local:
+                    try:
+                        _, status = install_github_ref(
+                            latest.ref,
+                            repo_url=repo_url,
+                            python_bin=python_bin,
+                            summary=latest.summary,
+                        )
+                        payload = {
+                            "installed_version": status.installed_version,
+                            "requested_ref": status.requested_ref,
+                            "resolved_ref": status.resolved_ref,
+                        }
+                        result_value = "ok"
+                    except PackageOperationError as exc:
+                        payload = None
+                        result_value = f"log: {exc.log_path}"
+                    address_value = detect_primary_address() or ""
                 else:
-                    payload = request_package_upgrade(
-                        node.address,
-                        repo_url=repo_url,
-                        include_prerelease=include_prerelease,
-                        port=node.client_port or DEFAULT_CLIENT_PORT,
-                    )
-                    address_value = node.address
-                    result_value = "ok" if payload is not None else "no response"
-            table.add_row(
-                _node_label(node.name),
-                address_value,
-                str((payload or {}).get("installed_version") or "unknown"),
-                str((payload or {}).get("requested_ref") or latest.ref),
-                str((payload or {}).get("resolved_ref") or ""),
-                result_value,
-            )
+                    if not node.address:
+                        payload = None
+                        address_value = ""
+                        result_value = "no address"
+                    else:
+                        payload = request_package_upgrade(
+                            node.address,
+                            repo_url=repo_url,
+                            include_prerelease=include_prerelease,
+                            port=node.client_port or DEFAULT_CLIENT_PORT,
+                        )
+                        address_value = node.address
+                        result_value = "ok" if payload is not None else "no response"
+                table.add_row(
+                    _node_label(node.name),
+                    address_value,
+                    str((payload or {}).get("installed_version") or "unknown"),
+                    str((payload or {}).get("requested_ref") or latest.ref),
+                    str((payload or {}).get("resolved_ref") or ""),
+                    result_value,
+                )
+                progress.advance(task)
         console.print(table)
         return
     _run_install_flow(ref=latest.ref, repo_url=repo_url, python_bin=python_bin, summary=latest.summary)
