@@ -1090,7 +1090,7 @@ def test_package_install_can_target_explicit_python(monkeypatch) -> None:
     seen: dict[str, object] = {}
     monkeypatch.setattr(
         "homebase_cli.cli.install_github_ref",
-        lambda ref, repo_url, python_bin=None, summary=None, on_tick=None: (
+        lambda ref, repo_url, python_bin=None, summary=None, on_stage=None: (
             seen.update({"python_bin": python_bin, "ref": ref}) or SimpleNamespace(returncode=0, stdout="installed\n", stderr="", log_path=Path("/tmp/install.log")),
             SimpleNamespace(installed_version="0.1.1", requested_ref=ref, resolved_ref="abc123"),
         ),
@@ -1110,7 +1110,7 @@ def test_package_update_uses_latest_github_version(monkeypatch) -> None:
     )
     monkeypatch.setattr(
         "homebase_cli.cli.install_github_ref",
-        lambda ref, repo_url, python_bin=None, summary=None, on_tick=None: (
+        lambda ref, repo_url, python_bin=None, summary=None, on_stage=None: (
             SimpleNamespace(returncode=0, stdout="installed\n", stderr="", log_path=Path("/tmp/install.log")),
             SimpleNamespace(installed_version="0.1.2", requested_ref=ref, resolved_ref="def456"),
         ),

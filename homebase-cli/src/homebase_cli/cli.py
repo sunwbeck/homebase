@@ -15,8 +15,7 @@ from datetime import UTC, datetime
 
 import click
 import typer
-from rich.live import Live
-from rich.progress import Progress, SpinnerColumn, BarColumn, TaskProgressColumn, TextColumn
+from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.table import Table
 from rich.console import Console
 
@@ -484,18 +483,24 @@ def _local_package_status_payload() -> dict[str, object]:
     }
 
 
-def _package_stage_table(description_prefix: str, stage_state: dict[str, tuple[int, int, str, str]]) -> Table:
-    """Build one live package stage table without fake progress bars."""
-    table = Table(show_header=True, header_style="bold")
-    table.add_column("Node")
-    table.add_column("Status")
-    table.add_column("Step")
-    table.add_column("Stage")
-    for node_name in sorted(stage_state):
-        step, total, label, status = stage_state[node_name]
-        table.add_row(node_name, status, f"{step}/{total}", label)
-    table.title = description_prefix
-    return table
+def _package_stage_text(
+    *,
+    description_prefix: str,
+    node_name: str,
+    step: int,
+    total: int,
+    label: str,
+    status: str,
+) -> str:
+    """Render one package stage line for spinner-style progress output."""
+    prefix = f"{description_prefix} {_node_label(node_name)}"
+    if status == "done":
+        return f"{prefix}: [{total}/{total}] done"
+    if status == "failed":
+        return f"{prefix}: [{step}/{total}] failed - {label}"
+    if status == "waiting":
+        return f"{prefix}: [{step}/{total}] queued"
+    return f"{prefix}: [{step}/{total}] {label}"
 
 
 def _run_package_batch(
@@ -511,29 +516,94 @@ def _run_package_batch(
     rows: dict[str, tuple[str, ...]] = {}
     stage_state: dict[str, tuple[int, int, str, str]] = {}
     max_workers = min(8, max(1, len(selected_nodes)))
-    with Live(_package_stage_table(description_prefix, stage_state), console=console, refresh_per_second=8) as live:
+    with Progress(SpinnerColumn(), TextColumn("{task.description}"), console=console) as progress:
+        task_ids: dict[str, object] = {}
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             future_map = {}
             for node in selected_nodes:
+                stage_state[node.name] = (1, 6, "queued", "waiting")
+                task_ids[node.name] = progress.add_task(
+                    _package_stage_text(
+                        description_prefix=description_prefix,
+                        node_name=node.name,
+                        step=1,
+                        total=6,
+                        label="queued",
+                        status="waiting",
+                    ),
+                    total=None,
+                )
+
                 def stage_callback(step: int, total: int, label: str, *, _name=node.name) -> None:
                     current = stage_state.get(_name, (step, total, label, "running"))
-                    stage_state[_name] = (step, total, label, current[3])
-                    live.update(_package_stage_table(description_prefix, stage_state), refresh=True)
-                stage_state[node.name] = (1, 4, "queued", "waiting")
-                live.update(_package_stage_table(description_prefix, stage_state), refresh=True)
+                    status = current[3] if current[3] in {"done", "failed"} else "running"
+                    stage_state[_name] = (step, total, label, status)
+                    progress.update(
+                        task_ids[_name],
+                        description=_package_stage_text(
+                            description_prefix=description_prefix,
+                            node_name=_name,
+                            step=step,
+                            total=total,
+                            label=label,
+                            status=status,
+                        ),
+                    )
+
                 future = executor.submit(worker, node, stage_callback)
-                stage_state[node.name] = (2, 4, "dispatched", "running")
-                live.update(_package_stage_table(description_prefix, stage_state), refresh=True)
+                stage_state[node.name] = (1, 6, "submitted", "running")
+                progress.update(
+                    task_ids[node.name],
+                    description=_package_stage_text(
+                        description_prefix=description_prefix,
+                        node_name=node.name,
+                        step=1,
+                        total=6,
+                        label="submitted",
+                        status="running",
+                    ),
+                )
                 future_map[future] = node
+
             while future_map:
                 finished = []
                 for future, node in list(future_map.items()):
                     if future.done():
-                        payload = future.result()
-                        rows[node.name] = row_builder(node, payload)
-                        step, total, label, _ = stage_state.get(node.name, (1, 1, "done", "running"))
-                        stage_state[node.name] = (total, total, label if label == "done" else "done", "done")
-                        live.update(_package_stage_table(description_prefix, stage_state), refresh=True)
+                        try:
+                            payload = future.result()
+                            rows[node.name] = row_builder(node, payload)
+                            step, total, label, _ = stage_state.get(node.name, (6, 6, "done", "running"))
+                            stage_state[node.name] = (total, total, "done", "done")
+                            progress.update(
+                                task_ids[node.name],
+                                description=_package_stage_text(
+                                    description_prefix=description_prefix,
+                                    node_name=node.name,
+                                    step=total,
+                                    total=total,
+                                    label="done",
+                                    status="done",
+                                ),
+                                completed=1,
+                            )
+                            progress.stop_task(task_ids[node.name])
+                        except Exception as exc:
+                            step, total, _, _ = stage_state.get(node.name, (1, 6, "failed", "running"))
+                            stage_state[node.name] = (step, total, str(exc), "failed")
+                            progress.update(
+                                task_ids[node.name],
+                                description=_package_stage_text(
+                                    description_prefix=description_prefix,
+                                    node_name=node.name,
+                                    step=step,
+                                    total=total,
+                                    label=str(exc),
+                                    status="failed",
+                                ),
+                                completed=1,
+                            )
+                            progress.stop_task(task_ids[node.name])
+                            raise
                         finished.append(future)
                 for future in finished:
                     del future_map[future]
@@ -2120,28 +2190,37 @@ def package_version_command(
 
 def _run_install_flow(
     *,
+    description_prefix: str,
     ref: str,
     repo_url: str,
     python_bin: str | None,
     summary: str | None,
 ) -> None:
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("{task.description}"),
-        BarColumn(),
-        TaskProgressColumn(),
-        console=console,
-    ) as progress:
-        task = progress.add_task(f"1/3 Resolve GitHub target: {ref}", total=100)
-        progress.update(task, completed=100)
-        task = progress.add_task(f"2/3 Install from GitHub ref: {ref}", total=100)
-        tick_value = 0
+    with Progress(SpinnerColumn(), TextColumn("{task.description}"), console=console) as progress:
+        task = progress.add_task(
+            _package_stage_text(
+                description_prefix=description_prefix,
+                node_name=_current_node_name() or "local",
+                step=1,
+                total=6,
+                label=f"resolving target {ref}",
+                status="running",
+            ),
+            total=None,
+        )
 
-        def install_tick() -> None:
-            nonlocal tick_value
-            if tick_value < 92:
-                tick_value += 1
-            progress.update(task, completed=tick_value)
+        def stage_callback(step: int, total: int, label: str) -> None:
+            progress.update(
+                task,
+                description=_package_stage_text(
+                    description_prefix=description_prefix,
+                    node_name=_current_node_name() or "local",
+                    step=step,
+                    total=total,
+                    label=label,
+                    status="running",
+                ),
+            )
 
         try:
             _, status = install_github_ref(
@@ -2149,16 +2228,26 @@ def _run_install_flow(
                 repo_url=repo_url,
                 python_bin=python_bin,
                 summary=summary,
-                on_tick=install_tick,
+                on_stage=stage_callback,
             )
         except PackageOperationError as exc:
             progress.stop()
             console.print(f"[red]Package install failed.[/red] Log: {exc.log_path}")
             console.print(f"Check the log with: `less {exc.log_path}`")
             raise typer.Exit(code=1)
-        progress.update(task, completed=100)
-        task = progress.add_task("3/3 Record installed revision", total=100)
-        progress.update(task, completed=100)
+        progress.update(
+            task,
+            description=_package_stage_text(
+                description_prefix=description_prefix,
+                node_name=_current_node_name() or "local",
+                step=6,
+                total=6,
+                label="done",
+                status="done",
+            ),
+            completed=1,
+        )
+        progress.stop_task(task)
     console.print(f"[green]Installed version:[/green] {status.installed_version or 'unknown'}")
     console.print(f"[green]Requested ref:[/green] {status.requested_ref}")
     if status.resolved_ref:
@@ -2281,7 +2370,13 @@ def package_install_command(
             table.add_row(*row)
         console.print(table)
         return
-    _run_install_flow(ref=selected_ref, repo_url=repo_url, python_bin=python_bin, summary=selected_summary)
+    _run_install_flow(
+        description_prefix="Installing",
+        ref=selected_ref,
+        repo_url=repo_url,
+        python_bin=python_bin,
+        summary=selected_summary,
+    )
 
 
 @package_app.command("update")
@@ -2393,7 +2488,13 @@ def package_update_command(
             table.add_row(*row)
         console.print(table)
         return
-    _run_install_flow(ref=latest.ref, repo_url=repo_url, python_bin=python_bin, summary=latest.summary)
+    _run_install_flow(
+        description_prefix="Updating",
+        ref=latest.ref,
+        repo_url=repo_url,
+        python_bin=python_bin,
+        summary=latest.summary,
+    )
 
 
 @dev_app.command("self-test")
