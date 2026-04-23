@@ -513,6 +513,13 @@ def _package_active_text(*, description_prefix: str, node_name: str, label: str)
     return f"{description_prefix} {_node_label(node_name)}: {label}"
 
 
+def _should_persist_package_stage(*, label: str, status: str) -> bool:
+    """Return whether one stage should stay in the permanent package log."""
+    if status in {"done", "failed"}:
+        return True
+    return label not in {"requesting remote update", "requesting remote install"}
+
+
 def _render_package_panels(
     *,
     selected_nodes: list,
@@ -618,13 +625,15 @@ def _consume_package_progress_events(
                 step = int(event.get("step", default_step) or default_step)
                 total = int(event.get("total", 6) or 6)
                 label = str(event.get("label") or "running")
-                stage_callback(step, total, label)
+                status = str(event.get("status") or "running")
+                stage_callback(step, total, label, status)
             return len(events)
         return seen_events
     step = int(progress_payload.get("step", default_step) or default_step)
     total = int(progress_payload.get("total", 6) or 6)
     label = str(progress_payload.get("label") or "running")
-    stage_callback(step, total, label)
+    status = str(progress_payload.get("status") or "running")
+    stage_callback(step, total, label, status)
     return seen_events
 
 
@@ -652,12 +661,11 @@ def _run_package_batch(
                 stage_state[node.name] = (1, 6, "submitted", "running")
                 live.update(_render_package_panels(selected_nodes=selected_nodes, node_logs=node_logs, stage_state=stage_state), refresh=True)
 
-                def stage_callback(step: int, total: int, label: str, *, _name=node.name) -> None:
+                def stage_callback(step: int, total: int, label: str, status: str = "running", *, _name=node.name) -> None:
                     current = stage_state.get(_name, (step, total, label, "running"))
                     previous = current[:3]
-                    status = current[3] if current[3] in {"done", "failed"} else "running"
                     stage_state[_name] = (step, total, label, status)
-                    if previous != (step, total, label):
+                    if previous != (step, total, label) and _should_persist_package_stage(label=label, status=status):
                         node_logs.setdefault(_name, []).append(
                             _package_stage_text(
                                 description_prefix=description_prefix,
@@ -684,18 +692,18 @@ def _run_package_batch(
                         try:
                             payload = future.result()
                             rows[node.name] = row_builder(node, payload)
-                            step, total, _, _ = stage_state.get(node.name, (6, 6, "done", "running"))
+                            step, total, current_label, current_status = stage_state.get(node.name, (6, 6, "done", "running"))
                             stage_state[node.name] = (total, total, "done", "done")
-                            node_logs.setdefault(node.name, []).append(
-                                _package_stage_text(
-                                    description_prefix=description_prefix,
-                                    node_name=node.name,
-                                    step=total,
-                                    total=total,
-                                    label="done",
-                                    status="done",
-                                )
+                            done_line = _package_stage_text(
+                                description_prefix=description_prefix,
+                                node_name=node.name,
+                                step=total,
+                                total=total,
+                                label="done",
+                                status="done",
                             )
+                            if current_status != "done" and (not node_logs.get(node.name) or node_logs[node.name][-1] != done_line):
+                                node_logs.setdefault(node.name, []).append(done_line)
                             with stage_lock:
                                 live.update(
                                     _render_package_panels(selected_nodes=selected_nodes, node_logs=node_logs, stage_state=stage_state),
@@ -2318,23 +2326,24 @@ def _run_install_flow(
     with Live(_render_package_panels(selected_nodes=[SimpleNamespace(name=local_name)], node_logs=node_logs, stage_state=stage_state), console=console, refresh_per_second=8) as live:
         last_stage: tuple[int, int, str] | None = None
 
-        def stage_callback(step: int, total: int, label: str) -> None:
+        def stage_callback(step: int, total: int, label: str, status: str = "running") -> None:
             nonlocal last_stage
-            current_stage = (step, total, label)
+            current_stage = (step, total, label, status)
             if current_stage == last_stage:
                 return
             last_stage = current_stage
-            stage_state[local_name] = (step, total, label, "running")
-            node_logs[local_name].append(
-                _package_stage_text(
-                    description_prefix=description_prefix,
-                    node_name=local_name,
-                    step=step,
-                    total=total,
-                    label=label,
-                    status="running",
-                ),
-            )
+            stage_state[local_name] = (step, total, label, status)
+            if _should_persist_package_stage(label=label, status=status):
+                node_logs[local_name].append(
+                    _package_stage_text(
+                        description_prefix=description_prefix,
+                        node_name=local_name,
+                        step=step,
+                        total=total,
+                        label=label,
+                        status=status,
+                    ),
+                )
             live.update(_render_package_panels(selected_nodes=[SimpleNamespace(name=local_name)], node_logs=node_logs, stage_state=stage_state), refresh=True)
 
         try:
@@ -2362,16 +2371,16 @@ def _run_install_flow(
             console.print(f"Check the log with: `less {exc.log_path}`")
             raise typer.Exit(code=1)
         stage_state[local_name] = (6, 6, "done", "done")
-        node_logs[local_name].append(
-            _package_stage_text(
-                description_prefix=description_prefix,
-                node_name=local_name,
-                step=6,
-                total=6,
-                label="done",
-                status="done",
-            )
+        done_line = _package_stage_text(
+            description_prefix=description_prefix,
+            node_name=local_name,
+            step=6,
+            total=6,
+            label="done",
+            status="done",
         )
+        if not node_logs[local_name] or node_logs[local_name][-1] != done_line:
+            node_logs[local_name].append(done_line)
         live.update(_render_package_panels(selected_nodes=[SimpleNamespace(name=local_name)], node_logs=node_logs, stage_state=stage_state), refresh=True)
     console.print(f"[green]Installed version:[/green] {status.installed_version or 'unknown'}")
     console.print(f"[green]Requested ref:[/green] {status.requested_ref}")

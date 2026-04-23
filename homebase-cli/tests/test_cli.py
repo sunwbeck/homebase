@@ -252,6 +252,36 @@ def test_main_handles_abort_without_traceback(monkeypatch, capsys) -> None:
     assert "Cancelled." in captured.out
 
 
+def test_should_persist_package_stage_filters_synthetic_remote_request(monkeypatch) -> None:
+    module = load_module(monkeypatch, "settings.toml")
+    assert module._should_persist_package_stage(label="requesting remote update", status="running") is False
+    assert module._should_persist_package_stage(label="requesting remote install", status="running") is False
+    assert module._should_persist_package_stage(label="running python -m pip install", status="running") is True
+    assert module._should_persist_package_stage(label="done", status="done") is True
+
+
+def test_consume_package_progress_events_passes_done_status(monkeypatch) -> None:
+    module = load_module(monkeypatch, "settings.toml")
+    seen: list[tuple[int, int, str, str]] = []
+    payload = {
+        "events": [
+            {"step": 5, "total": 6, "label": "resolved Git commit deadbeef", "status": "running"},
+            {"step": 6, "total": 6, "label": "done", "status": "done"},
+        ]
+    }
+    count = module._consume_package_progress_events(
+        progress_payload=payload,
+        seen_events=0,
+        default_step=2,
+        stage_callback=lambda step, total, label, status="running": seen.append((step, total, label, status)),
+    )
+    assert count == 2
+    assert seen == [
+        (5, 6, "resolved Git commit deadbeef", "running"),
+        (6, 6, "done", "done"),
+    ]
+
+
 def test_root_help_is_concise(monkeypatch) -> None:
     runner = CliRunner()
     app = load_app(monkeypatch)
