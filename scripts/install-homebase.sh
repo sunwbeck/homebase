@@ -75,7 +75,7 @@ fi
 
 "${install_python}" -m pip install --upgrade pip
 echo "Installing homebase from ${repo_url}@${git_ref}"
-"${install_python}" -m pip install --upgrade --force-reinstall "${install_target}"
+"${install_python}" -m pip install --upgrade --force-reinstall --no-cache-dir "${install_target}"
 
 if [[ -z "${VIRTUAL_ENV:-}" ]]; then
   ln -sfn "${managed_venv}/bin/hb" "${HOME}/.local/bin/hb"

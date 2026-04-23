@@ -17,7 +17,7 @@ from homebase_cli.packaging import (
 def test_install_command_quotes_git_target() -> None:
     command = install_command(DEFAULT_REPO_URL, "v0.1.0", python_bin="/usr/bin/python3")
     assert command == (
-        "/usr/bin/python3 -m pip install --upgrade --force-reinstall "
+        "/usr/bin/python3 -m pip install --upgrade --force-reinstall --no-cache-dir "
         "'git+https://github.com/sunwbeck/homebase.git@v0.1.0#subdirectory=homebase-cli'"
     )
 
