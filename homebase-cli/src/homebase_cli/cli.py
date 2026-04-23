@@ -103,6 +103,7 @@ package_app = typer.Typer(
     help="Check installed homebase revisions and install or update from GitHub.",
 )
 dev_app = typer.Typer(help="Development and internal commands.")
+service_app = typer.Typer(invoke_without_command=True, help="Run the local background service.")
 console = Console()
 DEFAULT_KIND_CHOICES = ("controller", "workstation", "host", "vm", "node")
 
@@ -381,6 +382,15 @@ def state_callback(ctx: typer.Context) -> None:
     raise typer.Exit(code=0)
 
 
+@service_app.callback()
+def service_callback(ctx: typer.Context) -> None:
+    """Show standard help when service is called without a subcommand."""
+    if ctx.invoked_subcommand is not None:
+        return
+    console.print(ctx.get_help())
+    raise typer.Exit(code=0)
+
+
 @package_app.callback()
 def package_callback(ctx: typer.Context) -> None:
     """Show standard help when package is called without a subcommand."""
@@ -520,6 +530,37 @@ def node_add_command(
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
     console.print(f"[green]Registered node {node.name}[/green]")
+
+
+@connect_app.command("status")
+def connect_status_command() -> None:
+    """Show controller discovery and registration status."""
+    _require_role("controller")
+    discovered = load_discovered_nodes()
+    pending = unregistered_discovered_nodes()
+    nodes = load_nodes()
+    console.print("[bold]Connect status[/bold]")
+    console.print(f"registered nodes: {len(nodes)}")
+    console.print(f"discovered nodes: {len(discovered)}")
+    console.print(f"unregistered discovered nodes: {len(pending)}")
+    if not discovered:
+        return
+    table = Table(show_header=True, header_style="bold")
+    table.add_column("Address")
+    table.add_column("Hostname")
+    table.add_column("Platform")
+    table.add_column("Registered")
+    matched = {node.address: node.name for node in nodes if node.address}
+    matched_ids = {node.node_id: node.name for node in nodes if node.node_id}
+    for item in discovered:
+        registered_name = matched.get(item.address) or matched_ids.get(item.discovery.node_id) or ""
+        table.add_row(
+            item.address,
+            item.discovery.hostname,
+            item.discovery.platform,
+            registered_name,
+        )
+    console.print(table)
 
 
 @app.command("status")
@@ -671,21 +712,33 @@ def client_profile_command() -> None:
     ))
 
 
-@connect_app.command("serve")
-def client_serve_command(
+def _run_controller_service_forever() -> None:
+    """Run the controller background service placeholder loop."""
+    while True:
+        time.sleep(3600)
+
+
+@service_app.command("start")
+def service_start_command(
     host: str = typer.Option("0.0.0.0", "--host", help="Listen address for the client endpoint."),
     port: int = typer.Option(DEFAULT_CLIENT_PORT, "--port", help="Listen port for the client endpoint."),
     foreground: bool = typer.Option(False, "--foreground", hidden=True),
 ) -> None:
-    """Serve the local homebase connect endpoint."""
-    _require_role("managed")
+    """Start the local background service."""
+    current_role = _current_runtime_role() or "managed"
     if foreground:
         clear_connect_runtime()
-        console.print(f"serving homebase client on {host}:{port}")
+        if current_role == "managed":
+            console.print(f"serving homebase client on {host}:{port}")
+        else:
+            console.print("running homebase controller service")
         try:
-            serve_client(host=host, port=port)
+            if current_role == "managed":
+                serve_client(host=host, port=port)
+            else:
+                _run_controller_service_forever()
         except OSError as exc:
-            console.print(f"[red]connect serve failed:[/red] {exc}")
+            console.print(f"[red]service start failed:[/red] {exc}")
             raise typer.Exit(code=1)
         return
     running = connect_server_running()
@@ -728,66 +781,53 @@ def client_serve_command(
     time.sleep(0.2)
     if process.poll() is not None:
         clear_connect_runtime()
-        console.print(f"[red]connect serve failed[/red]")
+        console.print(f"[red]service start failed[/red]")
         console.print(f"log: {CONNECT_LOG_PATH}")
         raise typer.Exit(code=1)
-    console.print(f"serving homebase client on {host}:{port}")
+    if current_role == "managed":
+        console.print(f"serving homebase client on {host}:{port}")
+    else:
+        console.print("running homebase controller service")
     console.print(f"background pid: {process.pid}")
     console.print(f"log: {CONNECT_LOG_PATH}")
 
 
-@connect_app.command("status")
-def connect_status_command() -> None:
-    """Show controller discovery status or managed connect-server status."""
+@service_app.command("status")
+def service_status_command() -> None:
+    """Show the local background service status on this node."""
     current_role = _current_runtime_role()
     if current_role == "managed":
         runtime = connect_server_running()
         if runtime is None:
-            console.print("connect server: stopped")
+            console.print("service: stopped")
             return
-        console.print("connect server: running")
+        console.print("service: running")
+        console.print("mode: managed connect endpoint")
         console.print(f"host: {runtime.host}")
         console.print(f"port: {runtime.port}")
         console.print(f"pid: {runtime.pid}")
         console.print(f"started at: {runtime.started_at}")
         console.print(f"log: {runtime.log_path}")
         return
-    _require_role("controller")
-    discovered = load_discovered_nodes()
-    pending = unregistered_discovered_nodes()
-    nodes = load_nodes()
-    console.print("[bold]Connect status[/bold]")
-    console.print(f"registered nodes: {len(nodes)}")
-    console.print(f"discovered nodes: {len(discovered)}")
-    console.print(f"unregistered discovered nodes: {len(pending)}")
-    if discovered:
-        table = Table(show_header=True, header_style="bold")
-        table.add_column("Address")
-        table.add_column("Hostname")
-        table.add_column("Platform")
-        table.add_column("Registered")
-        matched = {node.address: node.name for node in nodes if node.address}
-        matched_ids = {node.node_id: node.name for node in nodes if node.node_id}
-        for item in discovered:
-            registered_name = matched.get(item.address) or matched_ids.get(item.discovery.node_id) or ""
-            table.add_row(
-                item.address,
-                item.discovery.hostname,
-                item.discovery.platform,
-                registered_name,
-            )
-        console.print(table)
+    runtime = connect_server_running()
+    if runtime is None:
+        console.print("service: stopped")
+        return
+    console.print("service: running")
+    console.print("mode: controller daemon")
+    console.print(f"pid: {runtime.pid}")
+    console.print(f"started at: {runtime.started_at}")
+    console.print(f"log: {runtime.log_path}")
 
 
-@connect_app.command("stop")
-def connect_stop_command() -> None:
-    """Stop the managed connect server on this node."""
-    _require_role("managed")
+@service_app.command("stop")
+def service_stop_command() -> None:
+    """Stop the local background service on this node."""
     runtime = stop_connect_server()
     if runtime is None:
-        console.print("connect server: stopped")
+        console.print("service: stopped")
         return
-    console.print(f"stopped connect server on {runtime.host}:{runtime.port} (pid {runtime.pid})")
+    console.print(f"stopped service (pid {runtime.pid})")
 
 
 @app.command("init")
@@ -1481,9 +1521,6 @@ def _build_connect_app() -> typer.Typer:
         runtime_connect_app.command("status")(connect_status_command)
     if current_role in (None, "managed"):
         runtime_connect_app.command("code")(client_code_command)
-        runtime_connect_app.command("serve")(client_serve_command)
-        runtime_connect_app.command("status")(connect_status_command)
-        runtime_connect_app.command("stop")(connect_stop_command)
         runtime_connect_app.command("profile", hidden=True)(client_profile_command)
         runtime_connect_app.command("identity", hidden=True)(client_identity_command)
     return runtime_connect_app
@@ -1544,6 +1581,7 @@ def _build_root_app() -> typer.Typer:
     runtime_app = typer.Typer(no_args_is_help=True, help="Manage homebase controller and managed nodes.")
     runtime_app.command("init")(init_command)
     current_role = _current_runtime_role()
+    runtime_app.add_typer(service_app, name="service")
     runtime_app.add_typer(_build_connect_app(), name="connect")
     if current_role in (None, "controller"):
         runtime_app.command("status")(status_command)
