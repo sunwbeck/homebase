@@ -404,6 +404,17 @@ def _format_pair_code(code: str) -> str:
     return normalized
 
 
+def _format_pair_code_expiry(expires_at: str | None) -> str:
+    """Render one pairing code expiry timestamp briefly."""
+    if not expires_at:
+        return ""
+    try:
+        value = datetime.fromisoformat(expires_at)
+    except ValueError:
+        return expires_at
+    return value.astimezone().strftime("%Y-%m-%d %H:%M")
+
+
 def _is_interactive() -> bool:
     """Return True when stdin is interactive."""
     return sys.stdin.isatty()
@@ -802,7 +813,6 @@ def node_scan_command(
 def node_add_command(
     name: str | None = typer.Argument(None, help="Canonical node name such as host.app."),
     parent: str | None = typer.Option(None, "--parent", help="Optional parent node such as host."),
-    kind: str | None = typer.Option(None, "--kind", help="Node kind such as controller, workstation, host, vm, or node."),
     ssh_user: str | None = typer.Option(None, "--ssh-user", help="SSH user for the node."),
     description: str = typer.Option("", "--description", help="Short human-readable description."),
     client_port: int = typer.Option(DEFAULT_CLIENT_PORT, "--client-port", help="TCP port exposed by the homebase client."),
@@ -822,7 +832,6 @@ def node_add_command(
         default=(profile.node_name or selected.discovery.node_name or profile.hostname or selected.discovery.hostname),
     )
     resolved_parent = parent if parent is not None else _choose_parent()
-    resolved_kind = kind if kind is not None else _choose_kind()
     resolved_ssh_user = ssh_user if ssh_user is not None else typer.prompt("SSH user", default="", show_default=False).strip() or None
     resolved_description = description or typer.prompt(
         "Description",
@@ -833,7 +842,7 @@ def node_add_command(
         node = add_node(
             name=resolved_name,
             parent=resolved_parent,
-            kind=resolved_kind,
+            kind="node",
             address=selected.address,
             ssh_user=resolved_ssh_user,
             description=resolved_description,
@@ -884,6 +893,7 @@ def connect_status_command() -> None:
         runtime = connect_server_running()
         table = Table(show_header=True, header_style="bold")
         table.add_column("Pair Code")
+        table.add_column("Expires")
         table.add_column("Controller")
         table.add_column("Address")
         table.add_column("Hostname")
@@ -893,6 +903,7 @@ def connect_status_command() -> None:
         for index, controller in enumerate(controllers):
             table.add_row(
                 _format_pair_code(state.pair_code) if index == 0 else "",
+                _format_pair_code_expiry(state.pair_code_expires_at) if index == 0 else "",
                 controller.controller_id if controller is not None else "",
                 controller.address if controller is not None and controller.address is not None else "",
                 controller.hostname if controller is not None and controller.hostname is not None else "",
@@ -1071,13 +1082,12 @@ def client_identity_command() -> None:
 
 
 @connect_app.command("code")
-def client_code_command(
-    refresh: bool = typer.Option(False, "--refresh", help="Generate a new 8-digit pairing code before printing it."),
-) -> None:
-    """Print the current 8-digit pairing code for this managed node."""
+def client_code_command() -> None:
+    """Issue and print one fresh 8-digit pairing code for this managed node."""
     _require_role("managed")
-    state = refresh_pair_code() if refresh else load_client_state()
+    state = refresh_pair_code()
     console.print(_format_pair_code(state.pair_code))
+    console.print(f"expires: {_format_pair_code_expiry(state.pair_code_expires_at)}")
 
 
 @connect_app.command("profile", hidden=True)

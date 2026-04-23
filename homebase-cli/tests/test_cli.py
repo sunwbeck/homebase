@@ -116,7 +116,7 @@ def test_connect_add_uses_cached_discovery_and_pairing(monkeypatch) -> None:
             app,
             ["connect", "add", "host.app"],
             env={"HOMEBASE_SETTINGS_PATH": "settings.toml", "HOMEBASE_DISCOVERY_PATH": "discovered.json", "HOMEBASE_REGISTRY_PATH": "nodes.toml"},
-            input="1\n12345678\n1\n4\nsun\napp vm\n",
+            input="1\n12345678\n1\nsun\napp vm\n",
         )
         assert result.exit_code == 0
         assert "Registered node host.app" in result.stdout
@@ -413,6 +413,22 @@ def test_daemon_status_includes_local_identity(monkeypatch) -> None:
         assert "managed" in result.stdout
         assert "192.168.0.20" in result.stdout
         assert "0.0.0.0:8428" in result.stdout
+
+
+def test_connect_code_always_refreshes_and_shows_expiry(monkeypatch) -> None:
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        env = {"HOMEBASE_SETTINGS_PATH": "settings.toml"}
+        Path("settings.toml").write_text('role = "managed"\nnode_name = "app"\n', encoding="utf-8")
+        app = load_app(monkeypatch, "settings.toml")
+        monkeypatch.setattr(
+            "homebase_cli.cli.refresh_pair_code",
+            lambda: ClientState(pair_code="12345678", pair_code_expires_at="2026-04-24T22:30:00+09:00", paired_controllers=()),
+        )
+        result = runner.invoke(app, ["connect", "code"], env=env)
+        assert result.exit_code == 0
+        assert "1234 5678" in result.stdout
+        assert "expires:" in result.stdout
 
 
 def test_service_list_shows_local_services(monkeypatch) -> None:

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib.metadata import PackageNotFoundError, version
@@ -93,6 +93,7 @@ class ClientState:
     """Persistent pairing state stored on the client node."""
 
     pair_code: str
+    pair_code_expires_at: str | None = None
     paired_controllers: tuple[PairedController, ...] = ()
 
 
@@ -644,15 +645,40 @@ def generate_pair_code() -> str:
     return f"{secrets.randbelow(100_000_000):08d}"
 
 
+def _fresh_pair_code_expiry() -> str:
+    """Return the expiry timestamp for one newly issued pairing code."""
+    return (datetime.now(UTC) + timedelta(minutes=5)).replace(microsecond=0).isoformat()
+
+
+def _pair_code_is_expired(expires_at: str | None) -> bool:
+    """Return whether one pairing code expiry is missing or in the past."""
+    if not expires_at:
+        return True
+    try:
+        expiry = datetime.fromisoformat(expires_at)
+    except ValueError:
+        return True
+    return expiry <= datetime.now(UTC)
+
+
 def load_client_state(path: Path | None = None) -> ClientState:
     """Load or initialize the persistent client state."""
     target = state_path(path)
     if not target.exists():
-        state = ClientState(pair_code=generate_pair_code(), paired_controllers=())
+        state = ClientState(
+            pair_code=generate_pair_code(),
+            pair_code_expires_at=_fresh_pair_code_expiry(),
+            paired_controllers=(),
+        )
         save_client_state(state, target)
         return state
     payload = json.loads(target.read_text(encoding="utf-8"))
     pair_code = str(payload.get("pair_code", "")).strip()
+    pair_code_expires_at = payload.get("pair_code_expires_at")
+    if pair_code_expires_at not in (None, ""):
+        pair_code_expires_at = str(pair_code_expires_at).strip()
+    else:
+        pair_code_expires_at = None
     paired_entries: list[PairedController] = []
     for item in payload.get("paired_controllers", []):
         if isinstance(item, str):
@@ -673,18 +699,30 @@ def load_client_state(path: Path | None = None) -> ClientState:
                     )
                 )
     paired = tuple(paired_entries)
-    if len(pair_code) != 8 or not pair_code.isdigit():
+    if len(pair_code) != 8 or not pair_code.isdigit() or _pair_code_is_expired(pair_code_expires_at):
         pair_code = generate_pair_code()
-        save_client_state(ClientState(pair_code=pair_code, paired_controllers=paired), target)
-    return ClientState(pair_code=pair_code, paired_controllers=paired)
+        pair_code_expires_at = _fresh_pair_code_expiry()
+        save_client_state(
+            ClientState(
+                pair_code=pair_code,
+                pair_code_expires_at=pair_code_expires_at,
+                paired_controllers=paired,
+            ),
+            target,
+        )
+    return ClientState(pair_code=pair_code, pair_code_expires_at=pair_code_expires_at, paired_controllers=paired)
 
 
 def save_client_state(state: ClientState, path: Path | None = None) -> Path:
     """Persist the client state to disk."""
     target = state_path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
+    expires_at = state.pair_code_expires_at
+    if len(state.pair_code) == 8 and state.pair_code.isdigit() and _pair_code_is_expired(expires_at):
+        expires_at = _fresh_pair_code_expiry()
     payload = {
         "pair_code": state.pair_code,
+        "pair_code_expires_at": expires_at,
         "paired_controllers": [asdict(item) for item in state.paired_controllers],
         "updated_at": datetime.now(UTC).isoformat(),
     }
@@ -695,7 +733,11 @@ def save_client_state(state: ClientState, path: Path | None = None) -> Path:
 def refresh_pair_code(path: Path | None = None) -> ClientState:
     """Generate a new local pairing code while keeping existing pairings."""
     current = load_client_state(path)
-    updated = ClientState(pair_code=generate_pair_code(), paired_controllers=current.paired_controllers)
+    updated = ClientState(
+        pair_code=generate_pair_code(),
+        pair_code_expires_at=_fresh_pair_code_expiry(),
+        paired_controllers=current.paired_controllers,
+    )
     save_client_state(updated, path)
     return updated
 
@@ -708,7 +750,7 @@ def is_paired(controller_id: str, path: Path | None = None) -> bool:
 def pair_controller(request: PairRequest, path: Path | None = None) -> bool:
     """Attempt to pair one controller using the current local code."""
     current = load_client_state(path)
-    if request.code != current.pair_code:
+    if _pair_code_is_expired(current.pair_code_expires_at) or request.code != current.pair_code:
         return False
     paired_by_id = {item.controller_id: item for item in current.paired_controllers}
     paired_by_id[request.controller_id] = PairedController(
@@ -717,7 +759,11 @@ def pair_controller(request: PairRequest, path: Path | None = None) -> bool:
         address=request.address,
     )
     paired = tuple(sorted(paired_by_id.values(), key=lambda item: item.controller_id))
-    updated = ClientState(pair_code=generate_pair_code(), paired_controllers=paired)
+    updated = ClientState(
+        pair_code=generate_pair_code(),
+        pair_code_expires_at=_fresh_pair_code_expiry(),
+        paired_controllers=paired,
+    )
     save_client_state(updated, path)
     return True
 

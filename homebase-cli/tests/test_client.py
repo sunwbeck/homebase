@@ -1,3 +1,5 @@
+from datetime import UTC, datetime, timedelta
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -62,6 +64,34 @@ def test_pair_controller_rotates_code_on_success(tmp_path: Path) -> None:
     updated = load_client_state(path)
     assert updated.paired_controllers[0].controller_id == "control"
     assert updated.pair_code != "12345678"
+    assert updated.pair_code_expires_at is not None
+
+
+def test_load_client_state_refreshes_expired_code(tmp_path: Path) -> None:
+    path = tmp_path / "client-state.json"
+    path.write_text(
+        '{"pair_code":"12345678","pair_code_expires_at":"2000-01-01T00:00:00+00:00","paired_controllers":[]}\n',
+        encoding="utf-8",
+    )
+    updated = load_client_state(path)
+    assert updated.pair_code != "12345678"
+    assert updated.pair_code_expires_at is not None
+
+
+def test_pair_controller_rejects_expired_code(tmp_path: Path) -> None:
+    path = tmp_path / "client-state.json"
+    path.write_text(
+        json.dumps(
+            {
+                "pair_code": "12345678",
+                "pair_code_expires_at": (datetime.now(UTC) - timedelta(minutes=1)).replace(microsecond=0).isoformat(),
+                "paired_controllers": [],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    assert not pair_controller(PairRequest(controller_id="control", code="12345678"), path)
 
 
 def test_parse_package_install_request_requires_ref() -> None:
