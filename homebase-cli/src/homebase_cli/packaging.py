@@ -163,9 +163,9 @@ def github_install_target(repo_url: str, ref: str, subdirectory: str = DEFAULT_S
 
 
 def install_command(repo_url: str, ref: str, python_bin: str = "python3") -> str:
-    """Render a shell command that installs or upgrades one GitHub ref."""
+    """Render a shell command that installs or updates one GitHub ref."""
     target = github_install_target(repo_url, ref)
-    return f"{shlex.quote(python_bin)} -m pip install --upgrade {shlex.quote(target)}"
+    return f"{shlex.quote(python_bin)} -m pip install --upgrade --force-reinstall {shlex.quote(target)}"
 
 
 def _github_token() -> str | None:
@@ -378,11 +378,11 @@ def install_github_ref(
     summary: str | None = None,
     on_tick: Callable[[], None] | None = None,
 ) -> tuple[LoggedResult, InstalledPackageStatus]:
-    """Install or upgrade from one GitHub ref and persist local install state."""
+    """Install or update from one GitHub ref and persist local install state."""
     interpreter = python_bin if python_bin is not None else sys.executable
     target = github_install_target(repo_url, ref)
     result = _run_logged(
-        [interpreter, "-m", "pip", "install", "--upgrade", target],
+        [interpreter, "-m", "pip", "install", "--upgrade", "--force-reinstall", target],
         cwd=Path.cwd(),
         log_prefix="package-install",
         on_tick=on_tick,
