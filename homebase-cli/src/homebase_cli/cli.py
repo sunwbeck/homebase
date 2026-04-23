@@ -817,7 +817,10 @@ def node_add_command(
     _require_role("controller")
     selected = _choose_discovered_node()
     profile = _resolve_profile_for_node(selected, client_port)
-    resolved_name = name or typer.prompt("Node name", default=selected.discovery.node_name or selected.discovery.hostname)
+    resolved_name = name or typer.prompt(
+        "Node name",
+        default=(profile.node_name or selected.discovery.node_name or profile.hostname or selected.discovery.hostname),
+    )
     resolved_parent = parent if parent is not None else _choose_parent()
     resolved_kind = kind if kind is not None else _choose_kind()
     resolved_ssh_user = ssh_user if ssh_user is not None else typer.prompt("SSH user", default="", show_default=False).strip() or None
