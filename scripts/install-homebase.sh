@@ -7,6 +7,34 @@ subdirectory="homebase-cli"
 python_bin=""
 managed_venv="${HOME}/.local/share/homebase-cli/.venv"
 
+run_privileged() {
+  if [[ "$(id -u)" -eq 0 ]]; then
+    "$@"
+    return
+  fi
+  if command -v sudo >/dev/null 2>&1; then
+    sudo "$@"
+    return
+  fi
+  return 127
+}
+
+install_venv_support() {
+  if ! command -v apt-get >/dev/null 2>&1; then
+    return 1
+  fi
+
+  local versioned_pkg
+  versioned_pkg="$("${python_bin}" -c 'import sys; print(f"python{sys.version_info.major}.{sys.version_info.minor}-venv")')"
+
+  echo "Installing Python venv support package"
+  run_privileged apt-get update
+  if run_privileged apt-get install -y "${versioned_pkg}"; then
+    return 0
+  fi
+  run_privileged apt-get install -y python3-venv
+}
+
 usage() {
   cat <<'EOF'
 Usage: install-homebase.sh [--ref <git-ref>] [--repo <git-url>] [--python <python-bin>] [--venv <venv-path>]
@@ -68,7 +96,16 @@ if [[ -n "${VIRTUAL_ENV:-}" ]]; then
   echo "Using the current Python environment"
 else
   echo "Preparing homebase runtime"
-  "${python_bin}" -m venv "${managed_venv}"
+  if ! "${python_bin}" -m venv "${managed_venv}"; then
+    if install_venv_support; then
+      "${python_bin}" -m venv "${managed_venv}"
+    else
+      echo >&2
+      echo "Failed to create the homebase runtime environment." >&2
+      echo "Install Python venv support first, then rerun this installer." >&2
+      exit 1
+    fi
+  fi
   install_python="${managed_venv}/bin/python"
   mkdir -p "${HOME}/.local/bin"
 fi
