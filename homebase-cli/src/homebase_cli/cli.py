@@ -473,6 +473,12 @@ def _current_node_name() -> str | None:
     return load_settings().node_name
 
 
+def _needs_initialization() -> bool:
+    """Return True when the local installation has not been initialized yet."""
+    settings = load_settings()
+    return not settings.role or not settings.node_name
+
+
 def _choose_parent() -> str | None:
     mode = _pick_from_list("Hierarchy", ["Top-level node", "Child of an existing node"])
     if mode.startswith("Top-level"):
@@ -888,11 +894,7 @@ def service_stop_command() -> None:
     console.print(f"stopped service (pid {runtime.pid})")
 
 
-@app.command("init")
-def init_command(
-    role: str | None = typer.Option(None, "--role", help="Optional node type to set directly: controller or managed."),
-    name: str | None = typer.Option(None, "--name", help="Optional local node name to register directly."),
-) -> None:
+def _run_init(role: str | None = None, name: str | None = None) -> None:
     """Initialize this installation as a controller node or managed node."""
     selected = role.strip().lower() if role is not None else _choose_runtime_role()
     selected_name = (name.strip() if name is not None else "") or typer.prompt("Node name", default=_current_node_name() or socket.gethostname())
@@ -910,6 +912,15 @@ def init_command(
         raise typer.BadParameter(str(exc)) from exc
     console.print(f"[green]Set local node type to {updated.role}[/green]")
     console.print(f"[green]Registered local node name:[/green] {local_node.name}")
+
+
+@app.command("init")
+def init_command(
+    role: str | None = typer.Option(None, "--role", help="Optional node type to set directly: controller or managed."),
+    name: str | None = typer.Option(None, "--name", help="Optional local node name to register directly."),
+) -> None:
+    """Initialize this installation as a controller node or managed node."""
+    _run_init(role=role, name=name)
 
 
 @role_app.command("show")
@@ -1592,6 +1603,10 @@ app = _build_root_app()
 
 def main() -> None:
     """Run the CLI app."""
+    if len(sys.argv) == 1 and _needs_initialization():
+        console.print("[yellow]homebase is not initialized yet. Starting init...[/yellow]")
+        _run_init()
+        return
     app()
 
 
