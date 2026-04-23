@@ -15,6 +15,7 @@ from homebase_cli.client import (
     parse_discovery_payload,
     parse_pair_request,
     parse_profile_payload,
+    normalize_pair_code,
     save_client_state,
     state_path,
 )
@@ -55,6 +56,15 @@ def test_parse_profile_payload_includes_ports_and_services() -> None:
 def test_parse_pair_request_requires_8_digits() -> None:
     request = parse_pair_request({"controller_id": "control", "code": "12345678"})
     assert request == PairRequest(controller_id="control", code="12345678")
+
+
+def test_parse_pair_request_accepts_spaced_code() -> None:
+    request = parse_pair_request({"controller_id": "control", "code": "1234 5678"})
+    assert request == PairRequest(controller_id="control", code="12345678")
+
+
+def test_normalize_pair_code_removes_whitespace() -> None:
+    assert normalize_pair_code(" 1234  5678 ") == "12345678"
 
 
 def test_pair_controller_rotates_code_on_success(tmp_path: Path) -> None:

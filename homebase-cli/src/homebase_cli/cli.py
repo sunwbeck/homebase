@@ -33,6 +33,7 @@ from homebase_cli.client import (
     local_profile,
     load_client_state,
     load_connect_runtime,
+    normalize_pair_code,
     refresh_pair_code,
     serve_client,
     save_connect_runtime,
@@ -759,7 +760,7 @@ def _choose_discovered_node() -> DiscoveredNode:
 
 
 def _resolve_profile_for_node(selected: DiscoveredNode, client_port: int) -> object:
-    pair_code = typer.prompt("8-digit pairing code", type=str).strip()
+    pair_code = normalize_pair_code(typer.prompt("8-digit pairing code", type=str).strip())
     if len(pair_code) != 8 or not pair_code.isdigit():
         raise typer.BadParameter("pairing code must be exactly 8 digits")
     profile = pair_with_client(selected.address, pair_code, port=client_port)
@@ -1087,6 +1088,7 @@ def client_code_command() -> None:
     _require_role("managed")
     state = refresh_pair_code()
     console.print(_format_pair_code(state.pair_code))
+    console.print("use this code in `homebase connect add`; spaces are optional when entering it")
     console.print(f"expires: {_format_pair_code_expiry(state.pair_code_expires_at)}")
 
 

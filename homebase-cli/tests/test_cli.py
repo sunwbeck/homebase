@@ -428,6 +428,7 @@ def test_connect_code_always_refreshes_and_shows_expiry(monkeypatch) -> None:
         result = runner.invoke(app, ["connect", "code"], env=env)
         assert result.exit_code == 0
         assert "1234 5678" in result.stdout
+        assert "spaces are optional" in result.stdout
         assert "expires:" in result.stdout
 
 

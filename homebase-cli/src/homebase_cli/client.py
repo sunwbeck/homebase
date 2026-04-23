@@ -620,7 +620,7 @@ def parse_profile_payload(payload: dict[str, Any]) -> ClientProfile:
 def parse_pair_request(payload: dict[str, Any]) -> PairRequest:
     """Validate and normalize one pair request."""
     controller_id = str(payload.get("controller_id", "")).strip()
-    code = str(payload.get("code", "")).strip()
+    code = normalize_pair_code(str(payload.get("code", "")).strip())
     hostname = str(payload.get("hostname", "")).strip() or None
     address = str(payload.get("address", "")).strip() or None
     if not controller_id:
@@ -643,6 +643,11 @@ def state_path(path: Path | None = None) -> Path:
 def generate_pair_code() -> str:
     """Return a fresh 8-digit numeric pairing code."""
     return f"{secrets.randbelow(100_000_000):08d}"
+
+
+def normalize_pair_code(value: str) -> str:
+    """Normalize one pairing code by removing whitespace."""
+    return "".join(value.split())
 
 
 def _fresh_pair_code_expiry() -> str:
