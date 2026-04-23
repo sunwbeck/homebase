@@ -71,6 +71,7 @@ from homebase_cli.resources import all_resources, child_resources, find_resource
 from homebase_cli.scanner import (
     detect_scannable_networks,
     fetch_package_status,
+    load_discovered_nodes,
     request_package_install,
     request_package_upgrade,
     pair_with_client,
@@ -737,18 +738,45 @@ def client_serve_command(
 
 @connect_app.command("status")
 def connect_status_command() -> None:
-    """Show the managed connect server status on this node."""
-    _require_role("managed")
-    runtime = connect_server_running()
-    if runtime is None:
-        console.print("connect server: stopped")
+    """Show controller discovery status or managed connect-server status."""
+    current_role = _current_runtime_role()
+    if current_role == "managed":
+        runtime = connect_server_running()
+        if runtime is None:
+            console.print("connect server: stopped")
+            return
+        console.print("connect server: running")
+        console.print(f"host: {runtime.host}")
+        console.print(f"port: {runtime.port}")
+        console.print(f"pid: {runtime.pid}")
+        console.print(f"started at: {runtime.started_at}")
+        console.print(f"log: {runtime.log_path}")
         return
-    console.print("connect server: running")
-    console.print(f"host: {runtime.host}")
-    console.print(f"port: {runtime.port}")
-    console.print(f"pid: {runtime.pid}")
-    console.print(f"started at: {runtime.started_at}")
-    console.print(f"log: {runtime.log_path}")
+    _require_role("controller")
+    discovered = load_discovered_nodes()
+    pending = unregistered_discovered_nodes()
+    nodes = load_nodes()
+    console.print("[bold]Connect status[/bold]")
+    console.print(f"registered nodes: {len(nodes)}")
+    console.print(f"discovered nodes: {len(discovered)}")
+    console.print(f"unregistered discovered nodes: {len(pending)}")
+    if discovered:
+        table = Table(show_header=True, header_style="bold")
+        table.add_column("Address")
+        table.add_column("Hostname")
+        table.add_column("Platform")
+        table.add_column("Registered")
+        matched = {node.address: node.name for node in nodes if node.address}
+        matched_ids = {node.node_id: node.name for node in nodes if node.node_id}
+        for item in discovered:
+            registered_name = matched.get(item.address) or matched_ids.get(item.discovery.node_id) or ""
+            table.add_row(
+                item.address,
+                item.discovery.hostname,
+                item.discovery.platform,
+                registered_name,
+            )
+        console.print(table)
 
 
 @connect_app.command("stop")
@@ -760,7 +788,6 @@ def connect_stop_command() -> None:
         console.print("connect server: stopped")
         return
     console.print(f"stopped connect server on {runtime.host}:{runtime.port} (pid {runtime.pid})")
-    serve_client(host=host, port=port)
 
 
 @app.command("init")
@@ -1451,6 +1478,7 @@ def _build_connect_app() -> typer.Typer:
     if current_role in (None, "controller"):
         runtime_connect_app.command("scan")(node_scan_command)
         runtime_connect_app.command("add")(node_add_command)
+        runtime_connect_app.command("status")(connect_status_command)
     if current_role in (None, "managed"):
         runtime_connect_app.command("code")(client_code_command)
         runtime_connect_app.command("serve")(client_serve_command)
