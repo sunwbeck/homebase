@@ -82,11 +82,13 @@ What they do:
 
 ## Inventory And State Commands
 
-`homebase inventory` manages registered node names, node types, groups, links, and assignments.
+`homebase inventory` manages registered node names, node types, groups, links, assignments, and the local node role.
 
 ```bash
 homebase inventory list
 homebase inventory list host.app
+homebase inventory role show
+homebase inventory role set control
 homebase inventory group --add host-node
 homebase inventory group --add app-tier
 homebase inventory link host-node app-tier --add

@@ -411,7 +411,6 @@ def test_root_help_for_control_uses_control_workflow(monkeypatch) -> None:
     assert result.exit_code == 0
     output = result.stdout
     assert "│ init" in output
-    assert "│ role" in output
     assert "│ inventory" in output
     assert "│ state" in output
     assert "│ node" in output
@@ -431,7 +430,6 @@ def test_root_help_for_managed_hides_control_commands(monkeypatch) -> None:
     assert result.exit_code == 0
     output = result.stdout
     assert "│ init" in output
-    assert "│ role" in output
     assert "│ client" in output
     assert "│ package" in output
     assert "│ dev" in output
@@ -486,7 +484,7 @@ def test_node_help_uses_registry_workflow_order(monkeypatch) -> None:
 def test_role_help_uses_local_role_workflow(monkeypatch) -> None:
     runner = CliRunner()
     app = load_app(monkeypatch)
-    result = runner.invoke(app, ["role", "--help"])
+    result = runner.invoke(app, ["inventory", "role", "--help"])
     assert result.exit_code == 0
     output = result.stdout
     assert "show" in output
@@ -507,6 +505,7 @@ def test_inventory_help_uses_inventory_workflow(monkeypatch) -> None:
     assert "group" in output
     assert "link" in output
     assert "assign" in output
+    assert "role" in output
 
 
 def test_state_help_uses_simple_state_commands(monkeypatch) -> None:

@@ -15,6 +15,7 @@ General:
 
 ```bash
 homebase init
+homebase inventory role show
 homebase package status
 homebase package versions
 ```

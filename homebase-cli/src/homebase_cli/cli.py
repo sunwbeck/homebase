@@ -80,8 +80,8 @@ app = typer.Typer(no_args_is_help=True, help="Manage homebase control and client
 node_app = typer.Typer(help="Scan for clients and inspect registered nodes.")
 ansible_app = typer.Typer(help="Run ansible-related helper commands.")
 client_app = typer.Typer(help="Run the homebase client service on one managed node.")
-role_app = typer.Typer(invoke_without_command=True, help="Show or change the local node role.")
-inventory_app = typer.Typer(invoke_without_command=True, help="Inspect and manage registered nodes and groups.")
+inventory_app = typer.Typer(invoke_without_command=True, help="Inspect and manage registered nodes, groups, and local role.")
+inventory_role_app = typer.Typer(invoke_without_command=True, help="Show or change the local node role.")
 state_app = typer.Typer(invoke_without_command=True, help="Store and inspect saved state values for registered nodes.")
 package_app = typer.Typer(
     invoke_without_command=True,
@@ -189,9 +189,9 @@ def _render_group_tree(name: str, index: dict[str, object], rows: list[tuple[str
         _render_group_tree(member, index, rows, depth + 1, seen.copy())
 
 
-@role_app.callback()
-def role_callback(ctx: typer.Context) -> None:
-    """Show standard help when role is called without a subcommand."""
+@inventory_role_app.callback()
+def inventory_role_callback(ctx: typer.Context) -> None:
+    """Show standard help when inventory role is called without a subcommand."""
     if ctx.invoked_subcommand is not None:
         return
     console.print(ctx.get_help())
@@ -553,7 +553,7 @@ def init_command(
     console.print(f"[green]Registered local node name:[/green] {local_node.name}")
 
 
-@role_app.command("show")
+@inventory_role_app.command("show")
 def role_show_command() -> None:
     """Show the local node role and registered local node name."""
     settings = load_settings()
@@ -561,7 +561,7 @@ def role_show_command() -> None:
     console.print(f"node: {settings.node_name or 'not set'}")
 
 
-@role_app.command("set")
+@inventory_role_app.command("set")
 def role_set_command(
     runtime_role: str = typer.Argument(..., help="control or managed."),
 ) -> None:
@@ -1122,9 +1122,9 @@ def _build_dev_app() -> typer.Typer:
 def _build_root_app() -> typer.Typer:
     runtime_app = typer.Typer(no_args_is_help=True, help="Manage homebase control and managed nodes.")
     runtime_app.command("init")(init_command)
-    runtime_app.add_typer(role_app, name="role")
     current_role = _current_runtime_role()
     if current_role in (None, "control"):
+        inventory_app.add_typer(inventory_role_app, name="role")
         runtime_app.add_typer(inventory_app, name="inventory")
         runtime_app.add_typer(state_app, name="state")
         runtime_app.add_typer(_build_node_app(), name="node")
