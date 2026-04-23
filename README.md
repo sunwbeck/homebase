@@ -36,7 +36,7 @@ On the control node:
 homebase init
 homebase node scan
 homebase node add
-homebase role add host-node --template host
+homebase role group-add host-node
 homebase role assign host.app host-node
 homebase state set host.app status active
 ```
@@ -80,13 +80,12 @@ What they do:
 
 ## Role And State Commands
 
-`homebase role` defines reusable groups and assigns them to registered nodes.
+`homebase role` defines reusable groups and assigns registered nodes to them.
 
 ```bash
-homebase role templates
-homebase role add host-node --template host
-homebase role add app-tier --template service
-homebase role link host-node app-tier
+homebase role group-add host-node
+homebase role group-add app-tier
+homebase role group-link host-node app-tier
 homebase role assign host.app app-tier
 homebase role status
 homebase role status host.app

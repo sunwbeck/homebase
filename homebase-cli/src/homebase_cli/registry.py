@@ -43,7 +43,6 @@ class RoleGroup:
     """One named group used to organize nodes and other groups."""
 
     name: str
-    template: str = "custom"
     description: str = ""
     members: tuple[str, ...] = ()
 
@@ -109,7 +108,6 @@ def load_role_groups(path: Path | None = None) -> tuple[RoleGroup, ...]:
         groups.append(
             RoleGroup(
                 name=name,
-                template=str(values.get("template", "custom")).strip() or "custom",
                 description=str(values.get("description", "")),
                 members=tuple(str(member).strip() for member in values.get("members", []) if str(member).strip()),
             )
@@ -161,7 +159,6 @@ def _save_registry(nodes: tuple[Node, ...], role_groups: tuple[RoleGroup, ...], 
     for group in role_groups:
         lines.append("[[role_groups]]")
         lines.append(f'name = "{group.name}"')
-        lines.append(f'template = "{group.template}"')
         if group.description:
             escaped_description = group.description.replace("\\", "\\\\").replace('"', '\\"')
             lines.append(f'description = "{escaped_description}"')
@@ -248,7 +245,6 @@ def add_node(
 def add_role_group(
     *,
     name: str,
-    template: str = "custom",
     description: str = "",
     path: Path | None = None,
 ) -> RoleGroup:
@@ -261,7 +257,6 @@ def add_role_group(
         raise ValueError(f"group already exists: {normalized_name}")
     group = RoleGroup(
         name=normalized_name,
-        template=template.strip() or "custom",
         description=description.strip(),
         members=(),
     )
@@ -320,7 +315,6 @@ def link_role_group(parent: str, child: str, path: Path | None = None) -> None:
         updated.append(
             RoleGroup(
                 name=group.name,
-                template=group.template,
                 description=group.description,
                 members=group.members + (normalized_child,),
             )
@@ -343,7 +337,6 @@ def unlink_role_group(parent: str, child: str, path: Path | None = None) -> None
         updated.append(
             RoleGroup(
                 name=group.name,
-                template=group.template,
                 description=group.description,
                 members=tuple(item for item in group.members if item != normalized_child),
             )

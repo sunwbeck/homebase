@@ -63,10 +63,8 @@ from homebase_cli.scanner import (
 )
 from homebase_cli.selftest import run_client_self_test
 from homebase_cli.settings import (
-    add_role,
-    list_roles,
     load_settings,
-    role_templates,
+    runtime_roles,
     set_role,
 )
 
@@ -75,8 +73,8 @@ app = typer.Typer(no_args_is_help=True, help="Manage homebase control and client
 node_app = typer.Typer(help="Scan for clients and inspect registered nodes.")
 ansible_app = typer.Typer(help="Run ansible-related helper commands.")
 client_app = typer.Typer(help="Run the homebase client service on one managed node.")
-role_app = typer.Typer(invoke_without_command=True, help="Define local role groups and current-node memberships.")
-state_app = typer.Typer(invoke_without_command=True, help="Store and inspect current-node state values.")
+role_app = typer.Typer(invoke_without_command=True, help="Define node groups and assign registered nodes to them.")
+state_app = typer.Typer(invoke_without_command=True, help="Store and inspect saved state values for registered nodes.")
 package_app = typer.Typer(
     invoke_without_command=True,
     help="Check installed homebase revisions and install or update from GitHub.",
@@ -137,16 +135,8 @@ def _resolve_remote_package_target(resource: str):
     return node, port
 
 
-def _choose_or_add_role() -> str:
-    configured_roles = list(list_roles())
-    selected = _pick_from_list("Node role", [*configured_roles, "Add new role"])
-    if selected == "Add new role":
-        new_role = typer.prompt("New role").strip().lower()
-        if not new_role:
-            raise typer.BadParameter("new role cannot be empty")
-        add_role(new_role)
-        return new_role
-    return selected
+def _choose_runtime_role() -> str:
+    return _pick_from_list("Node type", list(runtime_roles()))
 
 
 def _group_index() -> dict[str, RoleGroup]:
@@ -171,7 +161,7 @@ def _render_group_tree(name: str, index: dict[str, object], rows: list[tuple[str
     if group is None:
         rows.append((f'{"  " * depth}{name}', "missing"))
         return
-    rows.append((f'{"  " * depth}{group.name}', group.template))
+    rows.append((f'{"  " * depth}{group.name}', "group"))
     for member in group.members:
         _render_group_tree(member, index, rows, depth + 1, seen.copy())
 
@@ -210,6 +200,10 @@ def _require_role(*allowed: str) -> None:
     if current not in allowed:
         joined = ", ".join(allowed)
         raise typer.BadParameter(f"this command is for role {joined}; current role is {current}")
+
+
+def _current_runtime_role() -> str | None:
+    return load_settings().role
 
 
 def _choose_parent() -> str | None:
@@ -455,7 +449,7 @@ def docs_command(doc: str | None = typer.Argument(None, help="Optional docs key 
 @client_app.command("identity")
 def client_identity_command() -> None:
     """Print the local homebase client discovery payload as JSON."""
-    _require_role("client")
+    _require_role("managed")
     console.print(json.dumps(discovery_payload(), indent=2, sort_keys=True))
 
 
@@ -464,7 +458,7 @@ def client_code_command(
     refresh: bool = typer.Option(False, "--refresh", help="Generate a new 8-digit pairing code before printing it."),
 ) -> None:
     """Print the current local pairing code."""
-    _require_role("client")
+    _require_role("managed")
     state = refresh_pair_code() if refresh else load_client_state()
     console.print(state.pair_code)
 
@@ -472,7 +466,7 @@ def client_code_command(
 @client_app.command("profile")
 def client_profile_command() -> None:
     """Print the local paired profile only for local inspection."""
-    _require_role("client")
+    _require_role("managed")
     profile = local_profile()
     console.print(json.dumps(
         {
@@ -494,26 +488,28 @@ def client_serve_command(
     port: int = typer.Option(DEFAULT_CLIENT_PORT, "--port", help="Listen port for the client endpoint."),
 ) -> None:
     """Serve the local homebase client identity over HTTP."""
-    _require_role("client")
+    _require_role("managed")
     console.print(f"serving homebase client on {host}:{port}")
     serve_client(host=host, port=port)
 
 
 @app.command("init")
 def init_command(
-    role: str | None = typer.Option(None, "--role", help="Optional role to set directly. If omitted, choose from configured roles or add a new one."),
+    role: str | None = typer.Option(None, "--role", help="Optional node type to set directly: control or managed."),
 ) -> None:
-    """Initialize the local node role for this homebase installation."""
-    selected = role.strip().lower() if role is not None else _choose_or_add_role()
-    if role is not None and selected not in list_roles():
-        add_role(selected)
-    updated = set_role(selected)
-    console.print(f"[green]Set local role to {updated.role}[/green]")
+    """Initialize this installation as a control node or managed node."""
+    selected = role.strip().lower() if role is not None else _choose_runtime_role()
+    try:
+        updated = set_role(selected)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    console.print(f"[green]Set local node type to {updated.role}[/green]")
 
 
 @role_app.command("status")
 def role_status_command(resource: str | None = typer.Argument(None, help="Optional resource path such as host.app.")) -> None:
     """Show saved role groups and one node's current group assignments."""
+    _require_role("control")
     groups = load_role_groups()
     if resource is not None:
         node = find_node(resource)
@@ -535,61 +531,50 @@ def role_status_command(resource: str | None = typer.Argument(None, help="Option
     for root_name in _group_roots():
         _render_group_tree(root_name, index, rows)
     if not rows:
-        rows = [(group.name, group.template) for group in groups]
+        rows = [(group.name, "group") for group in groups]
     console.print("group tree:")
     print_node_tree(rows)
-
-
-@role_app.command("templates")
-def role_templates_command() -> None:
-    """Show built-in role-group skeletons."""
-    table = Table(show_header=True, header_style="bold")
-    table.add_column("Template")
-    table.add_column("Purpose")
-    for name, summary in role_templates():
-        table.add_row(name, summary)
-    console.print(table)
 
 
 @role_app.command("list")
 def role_list_command() -> None:
     """List defined role groups."""
+    _require_role("control")
     groups = load_role_groups()
     if not groups:
         console.print("[yellow]No role groups defined yet.[/yellow]")
         return
     table = Table(show_header=True, header_style="bold")
     table.add_column("Name")
-    table.add_column("Template")
     table.add_column("Members")
     table.add_column("Description")
     for group in groups:
         table.add_row(
             group.name,
-            group.template,
             ", ".join(group.members) if group.members else "",
-            group.description or "",
+            group.description,
         )
     console.print(table)
 
 
-@role_app.command("add")
-def role_add_command(
+@role_app.command("group-add")
+def role_group_add_command(
     name: str = typer.Argument(..., help="Group name such as host-node or client-group."),
-    template: str = typer.Option("custom", "--template", help="Skeleton template such as node, host, group, fleet, or service."),
     description: str = typer.Option("", "--description", help="Short description."),
 ) -> None:
-    """Add one local role group."""
+    """Add one role group definition."""
+    _require_role("control")
     try:
-        add_role_group(name=name, template=template, description=description)
+        add_role_group(name=name, description=description)
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
     console.print(f"[green]Added role group:[/green] {name.strip().lower()}")
 
 
-@role_app.command("remove")
-def role_remove_command(name: str = typer.Argument(..., help="Group name.")) -> None:
-    """Remove one local role group."""
+@role_app.command("group-remove")
+def role_group_remove_command(name: str = typer.Argument(..., help="Group name.")) -> None:
+    """Remove one role group definition."""
+    _require_role("control")
     try:
         remove_role_group(name)
     except ValueError as exc:
@@ -597,12 +582,13 @@ def role_remove_command(name: str = typer.Argument(..., help="Group name.")) -> 
     console.print(f"[green]Removed role group:[/green] {name.strip().lower()}")
 
 
-@role_app.command("link")
-def role_link_command(
+@role_app.command("group-link")
+def role_group_link_command(
     parent: str = typer.Argument(..., help="Parent group name."),
     child: str = typer.Argument(..., help="Child group name."),
 ) -> None:
     """Link one child group under one parent group."""
+    _require_role("control")
     try:
         link_role_group(parent, child)
     except ValueError as exc:
@@ -610,12 +596,13 @@ def role_link_command(
     console.print(f"[green]Linked group:[/green] {child.strip().lower()} -> {parent.strip().lower()}")
 
 
-@role_app.command("unlink")
-def role_unlink_command(
+@role_app.command("group-unlink")
+def role_group_unlink_command(
     parent: str = typer.Argument(..., help="Parent group name."),
     child: str = typer.Argument(..., help="Child group name."),
 ) -> None:
     """Remove one child group link from one parent group."""
+    _require_role("control")
     try:
         unlink_role_group(parent, child)
     except ValueError as exc:
@@ -629,6 +616,7 @@ def role_assign_command(
     name: str = typer.Argument(..., help="Group name."),
 ) -> None:
     """Assign one registered node to one role group."""
+    _require_role("control")
     try:
         assign_node_role_group(resource, name)
     except ValueError as exc:
@@ -642,6 +630,7 @@ def role_unassign_command(
     name: str = typer.Argument(..., help="Group name."),
 ) -> None:
     """Remove one role-group assignment from one registered node."""
+    _require_role("control")
     try:
         unassign_node_role_group(resource, name)
     except ValueError as exc:
@@ -652,6 +641,7 @@ def role_unassign_command(
 @state_app.command("show")
 def state_show_command(resource: str = typer.Argument(..., help="Resource path such as host.app.")) -> None:
     """Show saved state values for one registered node."""
+    _require_role("control")
     node = find_node(resource)
     if node is None:
         raise typer.BadParameter(f"unknown node: {resource}")
@@ -674,6 +664,7 @@ def state_set_command(
     value: str = typer.Argument(..., help="State value."),
 ) -> None:
     """Set one saved state value on one registered node."""
+    _require_role("control")
     try:
         set_node_state(resource, key, value)
     except ValueError as exc:
@@ -687,6 +678,7 @@ def state_unset_command(
     key: str = typer.Argument(..., help="State key."),
 ) -> None:
     """Remove one saved state value from one registered node."""
+    _require_role("control")
     try:
         unset_node_state(resource, key)
     except ValueError as exc:
@@ -987,12 +979,15 @@ def _build_dev_app() -> typer.Typer:
 
 
 def _build_root_app() -> typer.Typer:
-    runtime_app = typer.Typer(no_args_is_help=True, help="Manage homebase control and client nodes.")
+    runtime_app = typer.Typer(no_args_is_help=True, help="Manage homebase control and managed nodes.")
     runtime_app.command("init")(init_command)
-    runtime_app.add_typer(role_app, name="role")
-    runtime_app.add_typer(state_app, name="state")
-    runtime_app.add_typer(_build_client_app(), name="client")
-    runtime_app.add_typer(_build_node_app(), name="node")
+    current_role = _current_runtime_role()
+    if current_role in (None, "control"):
+        runtime_app.add_typer(role_app, name="role")
+        runtime_app.add_typer(state_app, name="state")
+        runtime_app.add_typer(_build_node_app(), name="node")
+    if current_role in (None, "managed"):
+        runtime_app.add_typer(_build_client_app(), name="client")
     runtime_app.add_typer(_build_package_app(), name="package")
     runtime_app.add_typer(_build_dev_app(), name="dev")
     return runtime_app

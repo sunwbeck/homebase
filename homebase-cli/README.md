@@ -15,8 +15,8 @@ General:
 
 ```bash
 homebase init
-homebase role status
-homebase state show host.app
+homebase package status
+homebase package versions
 ```
 
 Client side:
@@ -31,6 +31,7 @@ Control side:
 ```bash
 homebase node scan
 homebase node add
+homebase role group-add app-tier
 homebase role assign host.app app-tier
 homebase state set host.app status active
 homebase package status host.app

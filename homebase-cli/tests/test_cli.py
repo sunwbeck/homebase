@@ -1,16 +1,23 @@
 import json
+import importlib
 from pathlib import Path
 from types import SimpleNamespace
 
 from typer.testing import CliRunner
 
-from homebase_cli.cli import app
+from homebase_cli import cli as cli_module
 from homebase_cli.client import ClientProfile
 from homebase_cli.selftest import SelfTestResult
 
 
+def load_app(monkeypatch, settings_path: str | None = None):
+    monkeypatch.setenv("HOMEBASE_SETTINGS_PATH", settings_path or ".homebase-test-settings.toml")
+    return importlib.reload(cli_module).app
+
+
 def test_node_scan_updates_discovery_cache(monkeypatch) -> None:
     runner = CliRunner()
+    app = load_app(monkeypatch)
     monkeypatch.setattr("homebase_cli.cli.detect_scannable_networks", lambda: ("192.168.0.0/24",))
     monkeypatch.setattr("homebase_cli.cli.scan_for_clients", lambda cidr, port, timeout: ())
     with runner.isolated_filesystem():
@@ -27,6 +34,7 @@ def test_node_scan_updates_discovery_cache(monkeypatch) -> None:
 
 def test_node_add_uses_cached_discovery_and_pairing(monkeypatch) -> None:
     runner = CliRunner()
+    app = load_app(monkeypatch)
     discovered = [
         {
             "address": "192.168.0.20",
@@ -66,6 +74,7 @@ def test_node_add_uses_cached_discovery_and_pairing(monkeypatch) -> None:
 
 def test_node_add_fails_when_pairing_code_is_wrong(monkeypatch) -> None:
     runner = CliRunner()
+    app = load_app(monkeypatch)
     discovered = [
         {
             "address": "192.168.0.20",
@@ -93,55 +102,51 @@ def test_node_add_fails_when_pairing_code_is_wrong(monkeypatch) -> None:
         assert "pairing failed" in result.output
 
 
-def test_init_sets_role() -> None:
+def test_init_sets_role(monkeypatch) -> None:
     runner = CliRunner()
     with runner.isolated_filesystem():
+        app = load_app(monkeypatch, "settings.toml")
         result = runner.invoke(app, ["init", "--role", "control"], env={"HOMEBASE_SETTINGS_PATH": "settings.toml"})
         assert result.exit_code == 0
-        assert "Set local role to control" in result.stdout
+        assert "Set local node type to control" in result.stdout
 
 
-def test_init_adds_unknown_role_when_given_directly() -> None:
+def test_init_rejects_unknown_role(monkeypatch) -> None:
     runner = CliRunner()
     with runner.isolated_filesystem():
+        app = load_app(monkeypatch, "settings.toml")
         result = runner.invoke(app, ["init", "--role", "builder"], env={"HOMEBASE_SETTINGS_PATH": "settings.toml"})
-        assert result.exit_code == 0
-        assert 'role = "builder"' in Path("settings.toml").read_text(encoding="utf-8")
+        assert result.exit_code != 0
+        assert "role must be one of: control, managed" in result.output
 
 
-def test_init_interactive_can_add_role() -> None:
+def test_init_interactive_can_choose_managed(monkeypatch) -> None:
     runner = CliRunner()
     with runner.isolated_filesystem():
+        app = load_app(monkeypatch, "settings.toml")
         result = runner.invoke(
             app,
             ["init"],
             env={"HOMEBASE_SETTINGS_PATH": "settings.toml"},
-            input="3\nbuilder\n",
+            input="2\n",
         )
         assert result.exit_code == 0
-        assert "Set local role to builder" in result.stdout
+        assert "Set local node type to managed" in result.stdout
 
 
-def test_role_templates_command_lists_skeletons() -> None:
-    runner = CliRunner()
-    result = runner.invoke(app, ["role", "templates"])
-    assert result.exit_code == 0
-    assert "host" in result.stdout
-    assert "fleet" in result.stdout
-
-
-def test_role_group_commands_build_hierarchy() -> None:
+def test_role_group_commands_build_hierarchy(monkeypatch) -> None:
     runner = CliRunner()
     with runner.isolated_filesystem():
         env = {"HOMEBASE_SETTINGS_PATH": "settings.toml", "HOMEBASE_REGISTRY_PATH": "nodes.toml"}
-        Path("settings.toml").write_text('role = "control"\nroles = ["control", "client"]\n', encoding="utf-8")
+        Path("settings.toml").write_text('role = "control"\n', encoding="utf-8")
         Path("nodes.toml").write_text(
             '[[nodes]]\nname = "host"\nkind = "host"\n\n[[nodes]]\nname = "host.app"\nparent = "host"\nkind = "vm"\n',
             encoding="utf-8",
         )
-        assert runner.invoke(app, ["role", "add", "host-node", "--template", "host"], env=env).exit_code == 0
-        assert runner.invoke(app, ["role", "add", "app-tier", "--template", "service"], env=env).exit_code == 0
-        assert runner.invoke(app, ["role", "link", "host-node", "app-tier"], env=env).exit_code == 0
+        app = load_app(monkeypatch, "settings.toml")
+        assert runner.invoke(app, ["role", "group-add", "host-node"], env=env).exit_code == 0
+        assert runner.invoke(app, ["role", "group-add", "app-tier"], env=env).exit_code == 0
+        assert runner.invoke(app, ["role", "group-link", "host-node", "app-tier"], env=env).exit_code == 0
         assert runner.invoke(app, ["role", "assign", "host.app", "app-tier"], env=env).exit_code == 0
         status_result = runner.invoke(app, ["role", "status", "host.app"], env=env)
         assert status_result.exit_code == 0
@@ -151,10 +156,12 @@ def test_role_group_commands_build_hierarchy() -> None:
         assert "app-tier" in tree_result.stdout
 
 
-def test_state_commands_store_values() -> None:
+def test_state_commands_store_values(monkeypatch) -> None:
     runner = CliRunner()
     with runner.isolated_filesystem():
         env = {"HOMEBASE_SETTINGS_PATH": "settings.toml", "HOMEBASE_REGISTRY_PATH": "nodes.toml"}
+        app = load_app(monkeypatch, "settings.toml")
+        Path("settings.toml").write_text('role = "control"\n', encoding="utf-8")
         Path("nodes.toml").write_text('[[nodes]]\nname = "host.app"\nkind = "vm"\n', encoding="utf-8")
         assert runner.invoke(app, ["state", "set", "host.app", "site", "home"], env=env).exit_code == 0
         assert runner.invoke(app, ["state", "set", "host.app", "status", "active"], env=env).exit_code == 0
@@ -167,6 +174,7 @@ def test_state_commands_store_values() -> None:
 
 def test_package_versions_prints_github_versions(monkeypatch) -> None:
     runner = CliRunner()
+    app = load_app(monkeypatch)
     monkeypatch.setattr(
         "homebase_cli.cli.github_versions",
         lambda repo_url, include_prerelease=False: (
@@ -182,6 +190,7 @@ def test_package_versions_prints_github_versions(monkeypatch) -> None:
 
 def test_package_version_alias_prints_github_versions(monkeypatch) -> None:
     runner = CliRunner()
+    app = load_app(monkeypatch)
     monkeypatch.setattr(
         "homebase_cli.cli.github_versions",
         lambda repo_url, include_prerelease=False: (
@@ -195,6 +204,7 @@ def test_package_version_alias_prints_github_versions(monkeypatch) -> None:
 
 def test_package_status_prints_local_install_state(monkeypatch) -> None:
     runner = CliRunner()
+    app = load_app(monkeypatch)
     monkeypatch.setattr(
         "homebase_cli.cli.load_install_state",
         lambda: SimpleNamespace(
@@ -218,6 +228,7 @@ def test_package_status_prints_local_install_state(monkeypatch) -> None:
 
 def test_package_status_remote_uses_registered_node(monkeypatch) -> None:
     runner = CliRunner()
+    app = load_app(monkeypatch, "settings.toml")
     monkeypatch.setattr(
         "homebase_cli.cli.find_resource",
         lambda resource: SimpleNamespace(address="192.168.1.10", client_port=8428),
@@ -227,7 +238,7 @@ def test_package_status_remote_uses_registered_node(monkeypatch) -> None:
         lambda address, port=8428: {"installed_version": "0.1.1", "requested_ref": "v0.1.1", "resolved_ref": "abc123"},
     )
     with runner.isolated_filesystem():
-        Path("settings.toml").write_text('role = "control"\nroles = ["control", "client"]\n', encoding="utf-8")
+        Path("settings.toml").write_text('role = "control"\n', encoding="utf-8")
         result = runner.invoke(app, ["package", "status", "host.app"], env={"HOMEBASE_SETTINGS_PATH": "settings.toml"})
         assert result.exit_code == 0
         assert "Remote package status: host.app" in result.stdout
@@ -236,6 +247,7 @@ def test_package_status_remote_uses_registered_node(monkeypatch) -> None:
 
 def test_package_install_prompts_for_github_version_before_progress(monkeypatch) -> None:
     runner = CliRunner()
+    app = load_app(monkeypatch)
     monkeypatch.setattr(
         "homebase_cli.cli.github_versions",
         lambda repo_url, include_prerelease=False: (
@@ -257,6 +269,7 @@ def test_package_install_prompts_for_github_version_before_progress(monkeypatch)
 
 def test_package_install_can_target_explicit_python(monkeypatch) -> None:
     runner = CliRunner()
+    app = load_app(monkeypatch)
     seen: dict[str, object] = {}
     monkeypatch.setattr(
         "homebase_cli.cli.install_github_ref",
@@ -273,6 +286,7 @@ def test_package_install_can_target_explicit_python(monkeypatch) -> None:
 
 def test_package_install_remote_requests_install(monkeypatch) -> None:
     runner = CliRunner()
+    app = load_app(monkeypatch, "settings.toml")
     monkeypatch.setattr(
         "homebase_cli.cli.find_resource",
         lambda resource: SimpleNamespace(address="192.168.1.10", client_port=8428),
@@ -286,7 +300,7 @@ def test_package_install_remote_requests_install(monkeypatch) -> None:
         },
     )
     with runner.isolated_filesystem():
-        Path("settings.toml").write_text('role = "control"\nroles = ["control", "client"]\n', encoding="utf-8")
+        Path("settings.toml").write_text('role = "control"\n', encoding="utf-8")
         result = runner.invoke(
             app,
             ["package", "install", "host.app", "--ref", "v0.1.1"],
@@ -299,6 +313,7 @@ def test_package_install_remote_requests_install(monkeypatch) -> None:
 
 def test_package_update_uses_latest_github_version(monkeypatch) -> None:
     runner = CliRunner()
+    app = load_app(monkeypatch)
     monkeypatch.setattr(
         "homebase_cli.cli.latest_github_version",
         lambda repo_url, include_prerelease=False: SimpleNamespace(ref="v0.1.2", version="v0.1.2", summary="latest note"),
@@ -317,6 +332,7 @@ def test_package_update_uses_latest_github_version(monkeypatch) -> None:
 
 def test_package_update_remote_requests_update(monkeypatch) -> None:
     runner = CliRunner()
+    app = load_app(monkeypatch, "settings.toml")
     monkeypatch.setattr(
         "homebase_cli.cli.latest_github_version",
         lambda repo_url, include_prerelease=False: SimpleNamespace(ref="v0.1.2", version="v0.1.2", summary="latest note"),
@@ -334,37 +350,52 @@ def test_package_update_remote_requests_update(monkeypatch) -> None:
         },
     )
     with runner.isolated_filesystem():
-        Path("settings.toml").write_text('role = "control"\nroles = ["control", "client"]\n', encoding="utf-8")
+        Path("settings.toml").write_text('role = "control"\n', encoding="utf-8")
         result = runner.invoke(app, ["package", "update", "host.app"], env={"HOMEBASE_SETTINGS_PATH": "settings.toml"})
         assert result.exit_code == 0
         assert "Remote update completed: host.app" in result.stdout
         assert "requested ref: v0.1.2" in result.stdout
 
 
-def test_root_help_uses_workflow_order() -> None:
+def test_root_help_for_control_uses_control_workflow(monkeypatch) -> None:
     runner = CliRunner()
-    result = runner.invoke(app, ["--help"])
+    with runner.isolated_filesystem():
+        Path("settings.toml").write_text('role = "control"\n', encoding="utf-8")
+        app = load_app(monkeypatch, "settings.toml")
+        result = runner.invoke(app, ["--help"], env={"HOMEBASE_SETTINGS_PATH": "settings.toml"})
     assert result.exit_code == 0
     output = result.stdout
-    command_lines = [line for line in output.splitlines() if line.strip().startswith(("│ init", "│ role", "│ state", "│ client", "│ node", "│ package", "│ dev"))]
-    assert command_lines == [
-        "│ init      Initialize the local node role for this homebase installation.     │",
-        "│ role      Define local role groups and current-node memberships.             │",
-        "│ state     Store and inspect current-node state values.                       │",
-        "│ client    Run the homebase client service on one managed node.               │",
-        "│ node      Scan for clients and inspect registered nodes.                     │",
-        "│ package   Check installed homebase revisions and install or update from      │",
-        "│ dev       Development and internal commands.                                 │",
-    ]
+    assert "│ init" in output
+    assert "│ role" in output
+    assert "│ state" in output
+    assert "│ node" in output
+    assert "│ package" in output
+    assert "│ dev" in output
+    assert "│ client" not in output
     assert "docs" not in output
     assert "ansible" not in output
-    assert "status" not in output
-    assert " ls " not in output
-    assert " info " not in output
 
 
-def test_package_help_uses_workflow_order() -> None:
+def test_root_help_for_managed_hides_control_commands(monkeypatch) -> None:
     runner = CliRunner()
+    with runner.isolated_filesystem():
+        Path("settings.toml").write_text('role = "managed"\n', encoding="utf-8")
+        app = load_app(monkeypatch, "settings.toml")
+        result = runner.invoke(app, ["--help"], env={"HOMEBASE_SETTINGS_PATH": "settings.toml"})
+    assert result.exit_code == 0
+    output = result.stdout
+    assert "│ init" in output
+    assert "│ client" in output
+    assert "│ package" in output
+    assert "│ dev" in output
+    assert "│ role" not in output
+    assert "│ state" not in output
+    assert "│ node" not in output
+
+
+def test_package_help_uses_workflow_order(monkeypatch) -> None:
+    runner = CliRunner()
+    app = load_app(monkeypatch)
     result = runner.invoke(app, ["package", "--help"])
     assert result.exit_code == 0
     output = result.stdout
@@ -378,8 +409,9 @@ def test_package_help_uses_workflow_order() -> None:
     assert "upgrade" not in output
 
 
-def test_dev_help_includes_internal_commands() -> None:
+def test_dev_help_includes_internal_commands(monkeypatch) -> None:
     runner = CliRunner()
+    app = load_app(monkeypatch)
     result = runner.invoke(app, ["dev", "--help"])
     assert result.exit_code == 0
     output = result.stdout
@@ -388,8 +420,9 @@ def test_dev_help_includes_internal_commands() -> None:
     assert "ansible" in output
 
 
-def test_node_help_uses_registry_workflow_order() -> None:
+def test_node_help_uses_registry_workflow_order(monkeypatch) -> None:
     runner = CliRunner()
+    app = load_app(monkeypatch)
     result = runner.invoke(app, ["node", "--help"])
     assert result.exit_code == 0
     output = result.stdout
@@ -403,21 +436,24 @@ def test_node_help_uses_registry_workflow_order() -> None:
     ]
 
 
-def test_role_help_uses_group_management_workflow() -> None:
+def test_role_help_uses_group_management_workflow(monkeypatch) -> None:
     runner = CliRunner()
+    app = load_app(monkeypatch)
     result = runner.invoke(app, ["role", "--help"])
     assert result.exit_code == 0
     output = result.stdout
-    assert "templates" in output
-    assert "list" in output
-    assert "add" in output
-    assert "link" in output
+    assert "group-add" in output
+    assert "group-remove" in output
+    assert "group-link" in output
+    assert "group-unlink" in output
     assert "assign" in output
     assert "unassign" in output
+    assert "templates" not in output
 
 
-def test_state_help_uses_simple_state_commands() -> None:
+def test_state_help_uses_simple_state_commands(monkeypatch) -> None:
     runner = CliRunner()
+    app = load_app(monkeypatch)
     result = runner.invoke(app, ["state", "--help"])
     assert result.exit_code == 0
     output = result.stdout
@@ -426,10 +462,11 @@ def test_state_help_uses_simple_state_commands() -> None:
     assert "unset" in output
 
 
-def test_client_commands_require_client_role() -> None:
+def test_client_commands_require_managed_role(monkeypatch) -> None:
     runner = CliRunner()
     with runner.isolated_filesystem():
         Path("settings.toml").write_text('role = "control"\n', encoding="utf-8")
+        app = load_app(monkeypatch, "settings.toml")
         result = runner.invoke(app, ["client", "code"], env={"HOMEBASE_SETTINGS_PATH": "settings.toml"})
         assert result.exit_code != 0
         assert "current role is control" in result.output
@@ -437,6 +474,7 @@ def test_client_commands_require_client_role() -> None:
 
 def test_dev_self_test_prints_success(monkeypatch) -> None:
     runner = CliRunner()
+    app = load_app(monkeypatch)
     monkeypatch.setattr(
         "homebase_cli.cli.run_client_self_test",
         lambda: SelfTestResult(
