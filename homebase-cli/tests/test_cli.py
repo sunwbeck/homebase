@@ -170,6 +170,12 @@ def test_init_interactive_can_choose_managed(monkeypatch) -> None:
         assert "Registered local node name: app" in result.stdout
 
 
+def test_pick_from_list_accepts_exact_value(monkeypatch) -> None:
+    module = load_module(monkeypatch, "settings.toml")
+    monkeypatch.setattr("typer.prompt", lambda *args, **kwargs: "managed")
+    assert module._pick_from_list("Local runtime role", ("controller", "managed")) == "managed"
+
+
 def test_main_starts_init_automatically_when_uninitialized(monkeypatch, capsys) -> None:
     module = load_module(monkeypatch, "settings.toml")
     called: dict[str, bool] = {"ran": False}

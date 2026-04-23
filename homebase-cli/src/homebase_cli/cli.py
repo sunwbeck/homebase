@@ -13,16 +13,10 @@ from typing import Sequence
 from datetime import UTC, datetime
 
 import click
-
 import typer
 from rich.progress import BarColumn, Progress, TaskID, SpinnerColumn, TaskProgressColumn, TextColumn
 from rich.table import Table
 from rich.console import Console
-
-try:
-    import questionary
-except ImportError:  # pragma: no cover - optional dependency fallback
-    questionary = None
 
 from homebase_cli.client import (
     ConnectRuntime,
@@ -226,21 +220,18 @@ def _format_discovered_label(item: DiscoveredNode) -> str:
 def _pick_from_list(label: str, options: Sequence[str]) -> str:
     if not options:
         raise typer.BadParameter(f"no options available for {label}")
-    if _is_interactive() and questionary is not None:
-        try:
-            selected = questionary.select(label, choices=list(options), use_indicator=True).ask()
-        except KeyboardInterrupt as exc:  # pragma: no cover - interactive terminal path
-            raise click.Abort() from exc
-        if selected is None:
-            raise click.Abort()
-        return selected
     console.print(f"{label}:")
     for index, option in enumerate(options, start=1):
         console.print(f"{index}. {option}")
-    choice = typer.prompt("Select number", type=int)
-    if choice < 1 or choice > len(options):
-        raise typer.BadParameter(f"invalid selection: {choice}")
-    return options[choice - 1]
+    response = typer.prompt("Select number or exact value", type=str).strip()
+    if response.isdigit():
+        choice = int(response)
+        if choice < 1 or choice > len(options):
+            raise typer.BadParameter(f"invalid selection: {choice}")
+        return options[choice - 1]
+    if response in options:
+        return response
+    raise typer.BadParameter(f"invalid selection: {response}")
 
 
 def _format_pair_code(code: str) -> str:
