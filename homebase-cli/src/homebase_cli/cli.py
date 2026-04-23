@@ -13,12 +13,16 @@ import sys
 from threading import Lock
 import time
 from datetime import UTC, datetime
+from types import SimpleNamespace
 
 import click
 import typer
-from rich.progress import Progress, SpinnerColumn, TextColumn
+from rich.console import Console, Group
+from rich.live import Live
+from rich.panel import Panel
+from rich.spinner import Spinner
+from rich.text import Text
 from rich.table import Table
-from rich.console import Console
 
 from homebase_cli.client import (
     ConnectRuntime,
@@ -509,6 +513,33 @@ def _package_active_text(*, description_prefix: str, node_name: str, label: str)
     return f"{description_prefix} {_node_label(node_name)}: {label}"
 
 
+def _render_package_panels(
+    *,
+    selected_nodes: list,
+    node_logs: dict[str, list[str]],
+    stage_state: dict[str, tuple[int, int, str, str]],
+) -> Group:
+    """Render grouped package progress panels, one per node."""
+    panels = []
+    for node in selected_nodes:
+        logs = node_logs.get(node.name, [])
+        step, total, label, status = stage_state.get(node.name, (1, 6, "waiting", "waiting"))
+        body_items: list[object] = []
+        if logs:
+            body_items.append(Text("\n".join(logs)))
+        if status in {"waiting", "running"}:
+            body_items.append(
+                Spinner(
+                    "dots",
+                    text=f"[{step}/{total}] {label}",
+                )
+            )
+        elif not logs:
+            body_items.append(Text("done" if status == "done" else status))
+        panels.append(Panel(Group(*body_items), title=_node_label(node.name), expand=True))
+    return Group(*panels)
+
+
 def _print_package_stage(
     *,
     description_prefix: str,
@@ -580,23 +611,16 @@ def _run_package_batch(
         return []
     rows: dict[str, tuple[str, ...]] = {}
     stage_state: dict[str, tuple[int, int, str, str]] = {}
+    node_logs: dict[str, list[str]] = {node.name: [] for node in selected_nodes}
     stage_lock = Lock()
     max_workers = min(8, max(1, len(selected_nodes)))
-    with Progress(SpinnerColumn(), TextColumn("{task.description}"), console=console, transient=False) as progress:
-        task_ids: dict[str, object] = {}
+    with Live(_render_package_panels(selected_nodes=selected_nodes, node_logs=node_logs, stage_state=stage_state), console=console, refresh_per_second=8) as live:
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             future_map = {}
             for node in selected_nodes:
                 stage_state[node.name] = (1, 6, "queued", "waiting")
-                task_ids[node.name] = progress.add_task(
-                    _package_active_text(
-                        description_prefix=description_prefix,
-                        node_name=node.name,
-                        label="submitted",
-                    ),
-                    total=None,
-                )
                 stage_state[node.name] = (1, 6, "submitted", "running")
+                live.update(_render_package_panels(selected_nodes=selected_nodes, node_logs=node_logs, stage_state=stage_state), refresh=True)
 
                 def stage_callback(step: int, total: int, label: str, *, _name=node.name) -> None:
                     current = stage_state.get(_name, (step, total, label, "running"))
@@ -604,24 +628,20 @@ def _run_package_batch(
                     status = current[3] if current[3] in {"done", "failed"} else "running"
                     stage_state[_name] = (step, total, label, status)
                     if previous != (step, total, label):
-                        _log_package_stage(
-                            progress=progress,
-                            description_prefix=description_prefix,
-                            node_name=_name,
-                            step=step,
-                            total=total,
-                            label=label,
-                            status=status,
-                            lock=stage_lock,
-                        )
-                    with stage_lock:
-                        progress.update(
-                            task_ids[_name],
-                            description=_package_active_text(
+                        node_logs.setdefault(_name, []).append(
+                            _package_stage_text(
                                 description_prefix=description_prefix,
                                 node_name=_name,
+                                step=step,
+                                total=total,
                                 label=label,
-                            ),
+                                status=status,
+                            )
+                        )
+                    with stage_lock:
+                        live.update(
+                            _render_package_panels(selected_nodes=selected_nodes, node_logs=node_logs, stage_state=stage_state),
+                            refresh=True,
                         )
 
                 future = executor.submit(worker, node, stage_callback)
@@ -636,33 +656,39 @@ def _run_package_batch(
                             rows[node.name] = row_builder(node, payload)
                             step, total, _, _ = stage_state.get(node.name, (6, 6, "done", "running"))
                             stage_state[node.name] = (total, total, "done", "done")
-                            _log_package_stage(
-                                progress=progress,
-                                description_prefix=description_prefix,
-                                node_name=node.name,
-                                step=total,
-                                total=total,
-                                label="done",
-                                status="done",
-                                lock=stage_lock,
+                            node_logs.setdefault(node.name, []).append(
+                                _package_stage_text(
+                                    description_prefix=description_prefix,
+                                    node_name=node.name,
+                                    step=total,
+                                    total=total,
+                                    label="done",
+                                    status="done",
+                                )
                             )
                             with stage_lock:
-                                progress.remove_task(task_ids[node.name])
+                                live.update(
+                                    _render_package_panels(selected_nodes=selected_nodes, node_logs=node_logs, stage_state=stage_state),
+                                    refresh=True,
+                                )
                         except Exception as exc:
                             step, total, _, _ = stage_state.get(node.name, (1, 6, "failed", "running"))
                             stage_state[node.name] = (step, total, str(exc), "failed")
-                            _log_package_stage(
-                                progress=progress,
-                                description_prefix=description_prefix,
-                                node_name=node.name,
-                                step=step,
-                                total=total,
-                                label=str(exc),
-                                status="failed",
-                                lock=stage_lock,
+                            node_logs.setdefault(node.name, []).append(
+                                _package_stage_text(
+                                    description_prefix=description_prefix,
+                                    node_name=node.name,
+                                    step=step,
+                                    total=total,
+                                    label=str(exc),
+                                    status="failed",
+                                )
                             )
                             with stage_lock:
-                                progress.remove_task(task_ids[node.name])
+                                live.update(
+                                    _render_package_panels(selected_nodes=selected_nodes, node_logs=node_logs, stage_state=stage_state),
+                                    refresh=True,
+                                )
                             raise
                         finished.append(future)
                 for future in finished:
@@ -2257,15 +2283,9 @@ def _run_install_flow(
     summary: str | None,
 ) -> None:
     local_name = _current_node_name() or "local"
-    with Progress(SpinnerColumn(), TextColumn("{task.description}"), console=console, transient=False) as progress:
-        task = progress.add_task(
-            _package_active_text(
-                description_prefix=description_prefix,
-                node_name=local_name,
-                label=f"resolving target {ref}",
-            ),
-            total=None,
-        )
+    node_logs = {local_name: []}
+    stage_state = {local_name: (1, 6, f"resolving target {ref}", "running")}
+    with Live(_render_package_panels(selected_nodes=[SimpleNamespace(name=local_name)], node_logs=node_logs, stage_state=stage_state), console=console, refresh_per_second=8) as live:
         last_stage: tuple[int, int, str] | None = None
 
         def stage_callback(step: int, total: int, label: str) -> None:
@@ -2274,23 +2294,18 @@ def _run_install_flow(
             if current_stage == last_stage:
                 return
             last_stage = current_stage
-            _log_package_stage(
-                progress=progress,
-                description_prefix=description_prefix,
-                node_name=local_name,
-                step=step,
-                total=total,
-                label=label,
-                status="running",
-            )
-            progress.update(
-                task,
-                description=_package_active_text(
+            stage_state[local_name] = (step, total, label, "running")
+            node_logs[local_name].append(
+                _package_stage_text(
                     description_prefix=description_prefix,
                     node_name=local_name,
+                    step=step,
+                    total=total,
                     label=label,
+                    status="running",
                 ),
             )
+            live.update(_render_package_panels(selected_nodes=[SimpleNamespace(name=local_name)], node_logs=node_logs, stage_state=stage_state), refresh=True)
 
         try:
             _, status = install_github_ref(
@@ -2301,20 +2316,33 @@ def _run_install_flow(
                 on_stage=stage_callback,
             )
         except PackageOperationError as exc:
-            progress.remove_task(task)
+            stage_state[local_name] = (6, 6, str(exc), "failed")
+            node_logs[local_name].append(
+                _package_stage_text(
+                    description_prefix=description_prefix,
+                    node_name=local_name,
+                    step=6,
+                    total=6,
+                    label=str(exc),
+                    status="failed",
+                )
+            )
+            live.update(_render_package_panels(selected_nodes=[SimpleNamespace(name=local_name)], node_logs=node_logs, stage_state=stage_state), refresh=True)
             console.print(f"[red]Package install failed.[/red] Log: {exc.log_path}")
             console.print(f"Check the log with: `less {exc.log_path}`")
             raise typer.Exit(code=1)
-        _log_package_stage(
-            progress=progress,
-            description_prefix=description_prefix,
-            node_name=local_name,
-            step=6,
-            total=6,
-            label="done",
-            status="done",
+        stage_state[local_name] = (6, 6, "done", "done")
+        node_logs[local_name].append(
+            _package_stage_text(
+                description_prefix=description_prefix,
+                node_name=local_name,
+                step=6,
+                total=6,
+                label="done",
+                status="done",
+            )
         )
-        progress.remove_task(task)
+        live.update(_render_package_panels(selected_nodes=[SimpleNamespace(name=local_name)], node_logs=node_logs, stage_state=stage_state), refresh=True)
     console.print(f"[green]Installed version:[/green] {status.installed_version or 'unknown'}")
     console.print(f"[green]Requested ref:[/green] {status.requested_ref}")
     if status.resolved_ref:
