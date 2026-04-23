@@ -599,6 +599,35 @@ def _log_package_stage(
             progress.console.print(message)
 
 
+def _consume_package_progress_events(
+    *,
+    progress_payload: dict[str, object] | None,
+    seen_events: int,
+    default_step: int,
+    stage_callback,
+) -> int:
+    """Consume one package progress payload and replay any new stage events."""
+    if progress_payload is None:
+        return seen_events
+    events = progress_payload.get("events")
+    if isinstance(events, list):
+        if seen_events < len(events):
+            for event in events[seen_events:]:
+                if not isinstance(event, dict):
+                    continue
+                step = int(event.get("step", default_step) or default_step)
+                total = int(event.get("total", 6) or 6)
+                label = str(event.get("label") or "running")
+                stage_callback(step, total, label)
+            return len(events)
+        return seen_events
+    step = int(progress_payload.get("step", default_step) or default_step)
+    total = int(progress_payload.get("total", 6) or 6)
+    label = str(progress_payload.get("label") or "running")
+    stage_callback(step, total, label)
+    return seen_events
+
+
 def _run_package_batch(
     *,
     selected_nodes: list,
@@ -614,6 +643,7 @@ def _run_package_batch(
     node_logs: dict[str, list[str]] = {node.name: [] for node in selected_nodes}
     stage_lock = Lock()
     max_workers = min(8, max(1, len(selected_nodes)))
+
     with Live(_render_package_panels(selected_nodes=selected_nodes, node_logs=node_logs, stage_state=stage_state), console=console, refresh_per_second=8) as live:
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             future_map = {}
@@ -2431,25 +2461,26 @@ def package_install_command(
                         job_id=job_id,
                         port=node.client_port or DEFAULT_CLIENT_PORT,
                     )
-                    if progress_payload is not None:
-                        events = progress_payload.get("events")
-                        if isinstance(events, list) and seen_events < len(events):
-                            for event in events[seen_events:]:
-                                if not isinstance(event, dict):
-                                    continue
-                                step = int(event.get("step", 3) or 3)
-                                total = int(event.get("total", 6) or 6)
-                                label = str(event.get("label") or "running")
-                                stage_callback(step, total, label)
-                            seen_events = len(events)
-                        else:
-                            step = int(progress_payload.get("step", 3) or 3)
-                            total = int(progress_payload.get("total", 6) or 6)
-                            label = str(progress_payload.get("label") or "running")
-                            stage_callback(step, total, label)
+                    seen_events = _consume_package_progress_events(
+                        progress_payload=progress_payload,
+                        seen_events=seen_events,
+                        default_step=3,
+                        stage_callback=stage_callback,
+                    )
                     time.sleep(0.2)
             finally:
                 request_thread.shutdown(wait=True)
+            progress_payload = fetch_package_progress(
+                node.address,
+                job_id=job_id,
+                port=node.client_port or DEFAULT_CLIENT_PORT,
+            )
+            seen_events = _consume_package_progress_events(
+                progress_payload=progress_payload,
+                seen_events=seen_events,
+                default_step=3,
+                stage_callback=stage_callback,
+            )
             payload = result_holder.get("payload")
             return {
                 "payload": payload,
@@ -2561,25 +2592,26 @@ def package_update_command(
                         job_id=job_id,
                         port=node.client_port or DEFAULT_CLIENT_PORT,
                     )
-                    if progress_payload is not None:
-                        events = progress_payload.get("events")
-                        if isinstance(events, list) and seen_events < len(events):
-                            for event in events[seen_events:]:
-                                if not isinstance(event, dict):
-                                    continue
-                                step = int(event.get("step", 2) or 2)
-                                total = int(event.get("total", 6) or 6)
-                                label = str(event.get("label") or "running")
-                                stage_callback(step, total, label)
-                            seen_events = len(events)
-                        else:
-                            step = int(progress_payload.get("step", 2) or 2)
-                            total = int(progress_payload.get("total", 6) or 6)
-                            label = str(progress_payload.get("label") or "running")
-                            stage_callback(step, total, label)
+                    seen_events = _consume_package_progress_events(
+                        progress_payload=progress_payload,
+                        seen_events=seen_events,
+                        default_step=2,
+                        stage_callback=stage_callback,
+                    )
                     time.sleep(0.2)
             finally:
                 request_thread.shutdown(wait=True)
+            progress_payload = fetch_package_progress(
+                node.address,
+                job_id=job_id,
+                port=node.client_port or DEFAULT_CLIENT_PORT,
+            )
+            seen_events = _consume_package_progress_events(
+                progress_payload=progress_payload,
+                seen_events=seen_events,
+                default_step=2,
+                stage_callback=stage_callback,
+            )
             payload = result_holder.get("payload")
             return {
                 "payload": payload,

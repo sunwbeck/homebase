@@ -444,7 +444,7 @@ def install_github_ref(
     """Install or update from one GitHub ref and persist local install state."""
     interpreter = python_bin if python_bin is not None else sys.executable
     if on_stage is not None:
-        on_stage(1, 6, "preparing source")
+        on_stage(1, 6, f"downloading source for {ref}")
     try:
         source_dir_holder, install_root = _prepare_install_source(repo_url, ref)
     except RuntimeError as exc:
@@ -453,8 +453,8 @@ def install_github_ref(
         raise PackageOperationError(str(exc), log_path) from exc
     try:
         if on_stage is not None:
-            on_stage(2, 6, "source ready")
-            on_stage(3, 6, "running installer")
+            on_stage(2, 6, f"prepared install source at {install_root}")
+            on_stage(3, 6, "running pip install --upgrade --force-reinstall")
         result = _run_logged(
             [interpreter, "-m", "pip", "install", "--upgrade", "--force-reinstall", "--no-cache-dir", str(install_root)],
             cwd=install_root,
@@ -465,8 +465,6 @@ def install_github_ref(
         source_dir_holder.cleanup()
     if result.returncode != 0:
         raise PackageOperationError("install failed", result.log_path)
-    if on_stage is not None:
-        on_stage(4, 6, "verifying installed version")
     status = InstalledPackageStatus(
         installed_version=installed_version(interpreter),
         repo_url=_normalize_repo_url(repo_url),
@@ -476,7 +474,7 @@ def install_github_ref(
         installed_at=None,
     )
     if on_stage is not None:
-        on_stage(5, 6, "resolving commit")
+        on_stage(4, 6, f"detected installed version {status.installed_version or 'unknown'}")
     status = InstalledPackageStatus(
         installed_version=status.installed_version,
         repo_url=status.repo_url,
@@ -486,6 +484,8 @@ def install_github_ref(
         installed_at=datetime.now(UTC).isoformat(),
     )
     if on_stage is not None:
-        on_stage(6, 6, "recording install state")
+        on_stage(5, 6, f"resolved commit {status.resolved_ref or 'unknown'}")
     save_install_state(status)
+    if on_stage is not None:
+        on_stage(6, 6, "saved install state")
     return result, status
