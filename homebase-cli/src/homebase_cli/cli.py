@@ -80,7 +80,7 @@ app = typer.Typer(invoke_without_command=True, help="Manage homebase control and
 node_app = typer.Typer(help="Scan for clients and inspect registered nodes.")
 ansible_app = typer.Typer(help="Run ansible-related helper commands.")
 client_app = typer.Typer(help="Run the homebase client service on one managed node.")
-inventory_app = typer.Typer(invoke_without_command=True, help="Browse registered nodes, groups, and inventory YAML.")
+inventory_app = typer.Typer(invoke_without_command=True, help="Show or open the ansible inventory YAML.")
 state_app = typer.Typer(invoke_without_command=True, help="Store and inspect saved state values for registered nodes.")
 package_app = typer.Typer(
     invoke_without_command=True,
@@ -293,11 +293,21 @@ def _render_group_tree(name: str, index: dict[str, object], rows: list[tuple[str
 
 
 @inventory_app.callback()
-def inventory_callback(ctx: typer.Context) -> None:
-    """Show standard help when inventory is called without a subcommand."""
+def inventory_callback(
+    ctx: typer.Context,
+    open_file: bool = typer.Option(False, "--open", help="Open the ansible inventory YAML file in $EDITOR."),
+) -> None:
+    """Show or open the ansible inventory YAML file."""
     if ctx.invoked_subcommand is not None:
         return
-    console.print(ctx.get_help())
+    _require_role("control")
+    if open_file:
+        target = open_ansible_inventory()
+        console.print(f"[green]Opened ansible inventory:[/green] {target}")
+        raise typer.Exit(code=0)
+    target = write_ansible_inventory()
+    console.print(f"[green]Inventory YAML:[/green] {target}")
+    console.print(target.read_text(encoding="utf-8"))
     raise typer.Exit(code=0)
 
 
@@ -333,6 +343,24 @@ def root_callback(
         return
     if select is not None:
         _handle_selected_action(select, description, add, remove, edit)
+        raise typer.Exit(code=0)
+    if add is not None or remove is not None or edit is not None or description:
+        _require_role("control")
+        if description:
+            raise typer.BadParameter("--description needs --select")
+        if edit is not None:
+            raise typer.BadParameter("--edit needs --select")
+        if add is not None and remove is not None:
+            raise typer.BadParameter("use only one of --add or --remove")
+        try:
+            if add is not None:
+                group = add_role_group(name=add, description="")
+                console.print(f"[green]Added group:[/green] {group.name}")
+            elif remove is not None:
+                remove_role_group(remove)
+                console.print(f"[green]Removed group:[/green] {remove.strip().lower()}")
+        except ValueError as exc:
+            raise typer.BadParameter(str(exc)) from exc
         raise typer.Exit(code=0)
     console.print(ctx.get_help())
     raise typer.Exit(code=0)
@@ -666,7 +694,7 @@ def init_command(
     console.print(f"[green]Registered local node name:[/green] {local_node.name}")
 
 
-@inventory_app.command("list")
+@app.command("list")
 def inventory_list_command(target: str | None = typer.Argument(None, help="Optional node or group name.")) -> None:
     """List registered nodes and groups, or show one node or group."""
     _require_role("control")
@@ -847,7 +875,7 @@ def inventory_assign_command(
         raise typer.BadParameter(str(exc)) from exc
 
 
-@inventory_app.command("file")
+@inventory_app.command("file", hidden=True)
 def inventory_file_command(
     open_file: bool = typer.Option(False, "--open", help="Open the ansible inventory YAML file in $EDITOR after writing it."),
 ) -> None:
@@ -1208,6 +1236,7 @@ def _build_root_app() -> typer.Typer:
     runtime_app.command("init")(init_command)
     current_role = _current_runtime_role()
     if current_role in (None, "control"):
+        runtime_app.command("list")(inventory_list_command)
         runtime_app.add_typer(inventory_app, name="inventory")
         runtime_app.add_typer(state_app, name="state")
         runtime_app.add_typer(_build_node_app(), name="node")

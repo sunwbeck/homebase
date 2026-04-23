@@ -16,6 +16,8 @@ General:
 ```bash
 homebase init
 homebase --select role --description
+homebase list
+homebase inventory
 homebase package status
 homebase package versions
 ```
@@ -30,14 +32,16 @@ homebase client serve
 Control side:
 
 ```bash
-homebase inventory list
+homebase list
 homebase node scan
 homebase node add
+homebase --add app-tier
 homebase --select host.app --description
 homebase --select host.app --add app-tier
 homebase --select host.app --edit host.api
 homebase --select app-tier --add host-group
-homebase inventory file
+homebase inventory
+homebase inventory --open
 homebase state set host.app status active
 homebase package status host.app
 homebase package install host.app --ref v0.1.1

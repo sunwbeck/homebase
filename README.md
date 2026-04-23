@@ -36,6 +36,8 @@ On the control node:
 homebase init
 homebase node scan
 homebase node add
+homebase --add host-node
+homebase --add app-tier
 homebase --select host-node --add app-tier
 homebase --select host.app --add app-tier
 homebase state set host.app status active
@@ -87,6 +89,8 @@ Use `homebase --select ...` when you want to inspect or change one local role, n
 ```bash
 homebase --select role --description
 homebase --select role --edit control
+homebase --add app-tier
+homebase --remove app-tier
 homebase --select host.app --description
 homebase --select host.app --edit host.api
 homebase --select host.app --add app-tier
@@ -97,16 +101,21 @@ homebase --select host-node --add app-tier
 homebase --select host-node --remove app-tier
 ```
 
-Use `homebase inventory` when you want to browse everything or inspect the ansible-style YAML.
+Use `homebase list` when you want to browse registered nodes and groups.
 
 ```bash
-homebase inventory list
-homebase inventory list host.app
-homebase inventory file
-homebase inventory file --open
+homebase list
+homebase list host.app
 ```
 
-`homebase inventory file` refreshes the ansible YAML and prints the YAML contents. `homebase inventory file --open` opens that YAML in your editor.
+Use `homebase inventory` when you want to inspect or edit the ansible-style YAML.
+
+```bash
+homebase inventory
+homebase inventory --open
+```
+
+`homebase inventory` refreshes the ansible YAML and prints the YAML contents. `homebase inventory --open` opens that YAML in your editor.
 
 `homebase state` stores simple key/value labels on registered nodes.
 
