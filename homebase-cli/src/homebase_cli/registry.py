@@ -534,12 +534,19 @@ def ensure_local_node(
     if not normalized_name:
         raise ValueError("node name cannot be empty")
     nodes = load_nodes(path)
-    existing = next((node for node in nodes if node.name == normalized_name), None)
-    if existing is None and previous_name:
+    previous = None
+    if previous_name:
         previous = next((node for node in nodes if node.name == previous_name.strip()), None)
-        if previous is not None:
+    existing = next((node for node in nodes if node.name == normalized_name), None)
+    if existing is None and previous is not None:
             existing = rename_node(previous.name, normalized_name, path=path)
             nodes = load_nodes(path)
+    elif existing is not None and previous is not None and previous.name != normalized_name:
+        # The local node was renamed earlier and the old registry entry is stale.
+        nodes = tuple(node for node in nodes if node.name != previous.name)
+        save_nodes(nodes, path)
+        nodes = load_nodes(path)
+        existing = next((node for node in nodes if node.name == normalized_name), None)
     if existing is None:
         kind = "controller" if normalize_node_runtime_role(runtime_role) == "controller" else "node"
         return add_node(

@@ -89,6 +89,22 @@ def test_ensure_local_node_creates_and_renames_local_entry(tmp_path: Path) -> No
     assert next(node for node in nodes if node.name == "workstation").runtime_hostname == "wsbox"
 
 
+def test_ensure_local_node_removes_stale_previous_entry_when_target_exists(tmp_path: Path) -> None:
+    path = tmp_path / "nodes.toml"
+    add_node(name="app", kind="controller", runtime_role="managed", runtime_hostname="control", path=path)
+    add_node(name="control", kind="controller", runtime_role="controller", runtime_hostname="control", path=path)
+    ensured = ensure_local_node(
+        "control",
+        "controller",
+        runtime_hostname="control",
+        previous_name="app",
+        path=path,
+    )
+    nodes = load_nodes(path)
+    assert ensured.name == "control"
+    assert [node.name for node in nodes] == ["control"]
+
+
 def test_save_nodes_escapes_service_record_backslashes(tmp_path: Path) -> None:
     path = tmp_path / "nodes.toml"
     save_nodes(
