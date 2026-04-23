@@ -4,6 +4,7 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+import click
 import pytest
 from typer.testing import CliRunner
 
@@ -136,7 +137,8 @@ def test_init_interactive_can_choose_managed(monkeypatch) -> None:
         result = runner.invoke(app, ["init"], env={"HOMEBASE_SETTINGS_PATH": "settings.toml"}, input="2\napp\n")
         assert result.exit_code == 0
         assert "Initial setup" in result.stdout
-        assert "runtime role" in result.stdout
+        assert "Choose how this node will participate in homebase." in result.stdout
+        assert "local runtime role" in result.stdout
         assert "Local node name" in result.stdout
         assert "Set local node type to managed" in result.stdout
         assert "Registered local node name: app" in result.stdout
@@ -153,12 +155,23 @@ def test_main_starts_init_automatically_when_uninitialized(monkeypatch, capsys) 
     assert "Starting init" in captured.out
 
 
+def test_main_handles_abort_without_traceback(monkeypatch, capsys) -> None:
+    module = load_module(monkeypatch, "settings.toml")
+    monkeypatch.setattr(module, "_run_init", lambda role=None, name=None: (_ for _ in ()).throw(click.Abort()))
+    monkeypatch.setattr(sys, "argv", ["hb"])
+    with pytest.raises(SystemExit) as exc:
+        module.main()
+    captured = capsys.readouterr()
+    assert exc.value.code == 130
+    assert "Cancelled." in captured.out
+
+
 def test_root_help_is_concise(monkeypatch) -> None:
     runner = CliRunner()
     app = load_app(monkeypatch)
     result = runner.invoke(app, ["--help"])
     assert result.exit_code == 0
-    assert "Operate homebase nodes from either a controller or a managed node." in result.stdout
+    assert "connect it to homebase" in result.stdout
     assert "Start with:" not in result.stdout
 
 
@@ -167,8 +180,7 @@ def test_init_help_explains_role_and_name(monkeypatch) -> None:
     app = load_app(monkeypatch)
     result = runner.invoke(app, ["init", "--help"])
     assert result.exit_code == 0
-    assert "local runtime role" in result.stdout
-    assert "local node name" in result.stdout
+    assert "choosing the local role and node name" in result.stdout.lower()
 
 
 def test_inventory_help_points_to_show_and_edit(monkeypatch) -> None:

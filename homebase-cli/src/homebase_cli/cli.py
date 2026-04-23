@@ -11,12 +11,18 @@ import sys
 import time
 from typing import Sequence
 from datetime import UTC, datetime
-from textwrap import dedent
+
+import click
 
 import typer
 from rich.progress import BarColumn, Progress, TaskID, SpinnerColumn, TaskProgressColumn, TextColumn
 from rich.table import Table
 from rich.console import Console
+
+try:
+    import questionary
+except ImportError:  # pragma: no cover - optional dependency fallback
+    questionary = None
 
 from homebase_cli.client import (
     ConnectRuntime,
@@ -92,7 +98,7 @@ from homebase_cli.settings import (
 
 app = typer.Typer(
     no_args_is_help=True,
-    help="Operate homebase nodes from either a controller or a managed node.",
+    help="Initialize this node, connect it to homebase, and inspect or manage the system.",
 )
 connect_app = typer.Typer(
     invoke_without_command=True,
@@ -220,6 +226,14 @@ def _format_discovered_label(item: DiscoveredNode) -> str:
 def _pick_from_list(label: str, options: Sequence[str]) -> str:
     if not options:
         raise typer.BadParameter(f"no options available for {label}")
+    if _is_interactive() and questionary is not None:
+        try:
+            selected = questionary.select(label, choices=list(options), use_indicator=True).ask()
+        except KeyboardInterrupt as exc:  # pragma: no cover - interactive terminal path
+            raise click.Abort() from exc
+        if selected is None:
+            raise click.Abort()
+        return selected
     console.print(f"{label}:")
     for index, option in enumerate(options, start=1):
         console.print(f"{index}. {option}")
@@ -975,9 +989,9 @@ def _run_init(role: str | None = None, name: str | None = None) -> None:
     """Initialize this installation with a local role and node name."""
     if role is None:
         console.print("[bold]Initial setup[/bold]")
-        console.print("homebase needs two local values before normal use:")
-        console.print("1. runtime role: controller or managed")
-        console.print("2. node name: the name shown in status, inventory, and pairing output")
+        console.print("Choose how this node will participate in homebase.")
+        console.print("1. local runtime role: controller or managed")
+        console.print("2. local node name: used in status, inventory, and pairing output")
     selected = role.strip().lower() if role is not None else _choose_runtime_role()
     selected_name = (name.strip() if name is not None else "") or typer.prompt(
         "Local node name",
@@ -1004,7 +1018,7 @@ def init_command(
     role: str | None = typer.Option(None, "--role", help="Optional node type to set directly: controller or managed."),
     name: str | None = typer.Option(None, "--name", help="Optional local node name to register directly."),
 ) -> None:
-    """Initialize this installation by setting the local runtime role and node name."""
+    """Initialize this installation by choosing the local role and node name."""
     _run_init(role=role, name=name)
 
 
@@ -1690,11 +1704,15 @@ app = _build_root_app()
 
 def main() -> None:
     """Run the CLI app."""
-    if len(sys.argv) == 1 and _needs_initialization():
-        console.print("[yellow]homebase is not initialized yet. Starting init...[/yellow]")
-        _run_init()
-        return
-    app()
+    try:
+        if len(sys.argv) == 1 and _needs_initialization():
+            console.print("[yellow]homebase is not initialized yet. Starting init...[/yellow]")
+            _run_init()
+            return
+        app()
+    except click.Abort:
+        console.print("[yellow]Cancelled.[/yellow]")
+        raise SystemExit(130) from None
 
 
 if __name__ == "__main__":
