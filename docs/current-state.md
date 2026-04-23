@@ -25,6 +25,7 @@ The near-term work is CLI cleanup and operator UX hardening, not repository relo
 Current priority:
 
 - make `status`, `node`, `group`, and `link` outputs clearly useful
+- make root and subcommand `--help` output self-sufficient for both humans and LLMs
 - keep one command grammar across controller and managed nodes
 - move background responsibilities under `service`
 - prepare the controller runtime for upcoming reverse proxy work

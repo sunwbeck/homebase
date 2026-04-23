@@ -6,6 +6,7 @@ from homebase_cli.packaging import (
     DEFAULT_REPO_URL,
     GitHubVersion,
     InstalledPackageStatus,
+    github_archive_url,
     github_install_target,
     github_repo_slug,
     github_versions,
@@ -16,12 +17,10 @@ from homebase_cli.packaging import (
 )
 
 
-def test_install_command_quotes_git_target() -> None:
+def test_install_command_uses_tarball_install_flow() -> None:
     command = install_command(DEFAULT_REPO_URL, "v0.1.0", python_bin="/usr/bin/python3")
-    assert command == (
-        "/usr/bin/python3 -m pip install --upgrade --force-reinstall --no-cache-dir "
-        "'git+https://github.com/sunwbeck/homebase.git@v0.1.0#subdirectory=homebase-cli'"
-    )
+    assert "curl -fsSL https://github.com/sunwbeck/homebase/archive/v0.1.0.tar.gz" in command
+    assert '/usr/bin/python3 -m pip install --upgrade --force-reinstall --no-cache-dir "$tmpdir/homebase-v0.1.0/homebase-cli"' in command
 
 
 def test_github_repo_slug_supports_https_and_ssh_urls() -> None:
@@ -29,10 +28,12 @@ def test_github_repo_slug_supports_https_and_ssh_urls() -> None:
     assert github_repo_slug("git@github.com:sunwbeck/homebase.git") == "sunwbeck/homebase"
 
 
-def test_github_install_target_uses_repo_ref_and_subdirectory() -> None:
-    assert github_install_target(DEFAULT_REPO_URL, "main") == (
-        "git+https://github.com/sunwbeck/homebase.git@main#subdirectory=homebase-cli"
-    )
+def test_github_archive_url_uses_repo_ref() -> None:
+    assert github_archive_url(DEFAULT_REPO_URL, "main") == "https://github.com/sunwbeck/homebase/archive/main.tar.gz"
+
+
+def test_github_install_target_uses_tarball_url() -> None:
+    assert github_install_target(DEFAULT_REPO_URL, "main") == "https://github.com/sunwbeck/homebase/archive/main.tar.gz"
 
 
 def test_github_versions_prefers_releases(monkeypatch) -> None:

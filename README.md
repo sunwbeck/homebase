@@ -30,6 +30,8 @@ The installer sets up `homebase` for the current user and makes `homebase` and `
 
 On first run, `homebase` or `hb` starts `homebase init` automatically if the local node role or node name has not been set yet.
 
+`homebase --help` and every subcommand `--help` are written to be usable on their own. The intended workflow is that a human or an LLM can discover the next command from help output without separate notes.
+
 ## Basic Flow
 
 On the controller node:

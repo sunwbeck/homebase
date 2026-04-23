@@ -11,6 +11,7 @@ import sys
 import time
 from typing import Sequence
 from datetime import UTC, datetime
+from textwrap import dedent
 
 import typer
 from rich.progress import BarColumn, Progress, TaskID, SpinnerColumn, TaskProgressColumn, TextColumn
@@ -89,21 +90,147 @@ from homebase_cli.settings import (
 )
 
 
-app = typer.Typer(no_args_is_help=True, help="Manage homebase controller and managed nodes.")
-connect_app = typer.Typer(invoke_without_command=True, help="Connect controllers and managed nodes.")
-node_app = typer.Typer(invoke_without_command=True, help="Inspect and manage registered nodes.")
-group_app = typer.Typer(invoke_without_command=True, help="Inspect and manage groups.")
-link_app = typer.Typer(invoke_without_command=True, help="Inspect and manage parent-child group links.")
-role_app = typer.Typer(invoke_without_command=True, help="Show or change the local role: controller or managed.")
-ansible_app = typer.Typer(help="Run ansible-related helper commands.")
-inventory_app = typer.Typer(invoke_without_command=True, help="Show or open the ansible inventory YAML.")
-state_app = typer.Typer(invoke_without_command=True, help="Store and inspect saved state values for registered nodes.")
+app = typer.Typer(
+    no_args_is_help=True,
+    help=dedent(
+        """\
+        Operate one homebase system from either a controller node or a managed node.
+
+        Start with:
+          homebase init
+
+        Common controller flow:
+          homebase status
+          homebase connect scan
+          homebase connect add
+
+        Common managed flow:
+          homebase connect code
+          homebase service start
+        """
+    ),
+)
+connect_app = typer.Typer(
+    invoke_without_command=True,
+    help=dedent(
+        """\
+        Pair controllers and managed nodes.
+
+        Controller:
+          homebase connect scan
+          homebase connect add host.app
+
+        Managed:
+          homebase connect code
+          homebase connect status
+        """
+    ),
+)
+node_app = typer.Typer(
+    invoke_without_command=True,
+    help=dedent(
+        """\
+        Inspect and edit registered nodes.
+
+        Examples:
+          homebase node list
+          homebase node show host.app
+          homebase node edit host.app name host.api
+          homebase node assign host.app app-tier
+        """
+    ),
+)
+group_app = typer.Typer(
+    invoke_without_command=True,
+    help=dedent(
+        """\
+        Inspect and edit reusable node groups.
+
+        Examples:
+          homebase group list
+          homebase group add app-tier
+          homebase group edit app-tier description "application workloads"
+        """
+    ),
+)
+link_app = typer.Typer(
+    invoke_without_command=True,
+    help=dedent(
+        """\
+        Manage parent-child links between groups.
+
+        Use this to build hierarchy such as:
+          host-node -> app-tier
+        """
+    ),
+)
+role_app = typer.Typer(
+    invoke_without_command=True,
+    help=dedent(
+        """\
+        Show or change runtime roles.
+
+        Local role:
+          homebase role show
+          homebase role edit controller
+
+        Registered node role from a controller:
+          homebase role list
+          homebase role edit host.app managed
+        """
+    ),
+)
+ansible_app = typer.Typer(help="Run ansible helper commands against the current inventory.")
+inventory_app = typer.Typer(
+    invoke_without_command=True,
+    help=dedent(
+        """\
+        Work with the rendered ansible inventory file.
+
+        Examples:
+          homebase inventory show
+          homebase inventory edit
+        """
+    ),
+)
+state_app = typer.Typer(
+    invoke_without_command=True,
+    help=dedent(
+        """\
+        Save simple labels or operator state on registered nodes.
+
+        Examples:
+          homebase state show host.app
+          homebase state set host.app status active
+        """
+    ),
+)
 package_app = typer.Typer(
     invoke_without_command=True,
-    help="Check installed homebase revisions and install or update from GitHub.",
+    help=dedent(
+        """\
+        Check the installed homebase revision and install or update from GitHub.
+
+        Examples:
+          homebase package status
+          homebase package versions
+          homebase package update
+          homebase package install --ref v0.1.8
+        """
+    ),
 )
-dev_app = typer.Typer(help="Development and internal commands.")
-service_app = typer.Typer(invoke_without_command=True, help="Run the local background service.")
+dev_app = typer.Typer(help="Development, diagnostics, and internal helper commands.")
+service_app = typer.Typer(
+    invoke_without_command=True,
+    help=dedent(
+        """\
+        Run the local background service on this node.
+
+        Managed nodes run the connect endpoint here.
+        Controller nodes run the long-lived controller daemon here.
+        """
+    ),
+)
 console = Console()
 DEFAULT_KIND_CHOICES = ("controller", "workstation", "host", "vm", "node")
 
@@ -525,7 +652,10 @@ def node_scan_command(
     port: int = typer.Option(DEFAULT_CLIENT_PORT, "--port", help="TCP port exposed by the homebase client."),
     timeout: float = typer.Option(0.35, "--timeout", help="Per-host timeout in seconds."),
 ) -> None:
-    """Scan a local network for homebase clients and update the discovery cache."""
+    """Scan the local network for managed nodes that are running `homebase service start`.
+
+    Run this on the controller before `homebase connect add`.
+    """
     _require_role("controller")
     networks = (cidr,) if cidr is not None else detect_scannable_networks()
     if not networks:
@@ -565,7 +695,13 @@ def node_add_command(
     description: str = typer.Option("", "--description", help="Short human-readable description."),
     client_port: int = typer.Option(DEFAULT_CLIENT_PORT, "--client-port", help="TCP port exposed by the homebase client."),
 ) -> None:
-    """Add one node to the persistent local registry, preferably from discovered clients."""
+    """Pair one discovered managed node and register it in the local inventory.
+
+    Typical flow:
+      1. On the managed node, run `homebase connect code` and `homebase service start`
+      2. On the controller, run `homebase connect scan`
+      3. Then run this command and enter the 8-digit pairing code
+    """
     _require_role("controller")
     selected = _choose_discovered_node()
     profile = _resolve_profile_for_node(selected, client_port)
@@ -596,7 +732,11 @@ def node_add_command(
 
 @connect_app.command("status")
 def connect_status_command() -> None:
-    """Show controller discovery status or managed pairing status."""
+    """Show connection-related status for this node.
+
+    Controller nodes see discovered managed nodes.
+    Managed nodes see the current pair code, paired controllers, and service state.
+    """
     current_role = _current_runtime_role()
     if current_role == "managed":
         state = load_client_state()
@@ -644,14 +784,21 @@ def connect_status_command() -> None:
 
 @app.command("status")
 def status_command() -> None:
-    """Show the current live status of registered nodes."""
+    """Show one controller-side overview table for all registered nodes.
+
+    This is the main fleet status view: node name, role, address, hostname,
+    OS, service state, ports, services, groups, and saved state labels.
+    """
     _require_role("controller")
     _print_registered_overview()
 
 
 @node_app.command("list")
 def node_list_command(resource: str | None = typer.Argument(None, help="Optional parent node name.")) -> None:
-    """List registered nodes for comparison."""
+    """List registered nodes in one comparison table.
+
+    Use `homebase node show <node>` when you want one node in detail.
+    """
     _require_role("controller")
     if resource is None:
         resources = _inventory_nodes()
@@ -691,7 +838,11 @@ def node_list_command(resource: str | None = typer.Argument(None, help="Optional
 
 @node_app.command("show")
 def node_show_command(resource: str = typer.Argument(..., help="Canonical node name.")) -> None:
-    """Show detailed information for one registered node."""
+    """Show one node in detail.
+
+    The detailed view includes identity, runtime, network, hierarchy, groups,
+    saved state labels, and direct children.
+    """
     _require_role("controller")
     _show_node_details(resource)
 
@@ -700,7 +851,7 @@ def node_show_command(resource: str = typer.Argument(..., help="Canonical node n
 def ansible_inventory_command(
     output: Path | None = typer.Option(None, "--output", help="Optional output path for the rendered inventory."),
 ) -> None:
-    """Render the current node registry as an ansible YAML inventory."""
+    """Render the current controller inventory as ansible YAML."""
     _require_role("controller")
     if output is None:
         output = Path("inventory.yml")
@@ -710,7 +861,7 @@ def ansible_inventory_command(
 
 @ansible_app.command("ping")
 def ansible_ping_command(node: str = typer.Argument(..., help="Registered node name.")) -> None:
-    """Run ansible ping against one registered node."""
+    """Run `ansible -m ping` against one registered node."""
     _require_role("controller")
     result = ansible_ping(node)
     if result.stdout:
@@ -723,7 +874,7 @@ def ansible_ping_command(node: str = typer.Argument(..., help="Registered node n
 
 @app.command("docs")
 def docs_command(doc: str | None = typer.Argument(None, help="Optional docs key such as current-state.")) -> None:
-    """List known docs or show one doc path."""
+    """List repo docs or show one known doc entry."""
     if doc is None:
         rows = [(entry.key, entry.filename, entry.summary) for entry in list_docs()]
         print_docs_table(rows)
@@ -750,7 +901,10 @@ def client_identity_command() -> None:
 def client_code_command(
     refresh: bool = typer.Option(False, "--refresh", help="Generate a new 8-digit pairing code before printing it."),
 ) -> None:
-    """Print the current local pairing code."""
+    """Print the current 8-digit pairing code for this managed node.
+
+    Use `--refresh` to invalidate the old code and create a new one.
+    """
     _require_role("managed")
     state = refresh_pair_code() if refresh else load_client_state()
     console.print(_format_pair_code(state.pair_code))
@@ -787,7 +941,11 @@ def service_start_command(
     port: int = typer.Option(DEFAULT_CLIENT_PORT, "--port", help="Listen port for the managed connect endpoint."),
     foreground: bool = typer.Option(False, "--foreground", hidden=True),
 ) -> None:
-    """Start the local background service."""
+    """Start the local background service for this node.
+
+    Managed nodes expose the connect endpoint here.
+    Controller nodes run the long-lived controller daemon here.
+    """
     current_role = _current_runtime_role() or "managed"
     if foreground:
         if current_role == "managed":
@@ -895,7 +1053,7 @@ def service_stop_command() -> None:
 
 
 def _run_init(role: str | None = None, name: str | None = None) -> None:
-    """Initialize this installation as a controller node or managed node."""
+    """Initialize this installation with a local role and node name."""
     selected = role.strip().lower() if role is not None else _choose_runtime_role()
     selected_name = (name.strip() if name is not None else "") or typer.prompt("Node name", default=_current_node_name() or socket.gethostname())
     try:
@@ -919,13 +1077,21 @@ def init_command(
     role: str | None = typer.Option(None, "--role", help="Optional node type to set directly: controller or managed."),
     name: str | None = typer.Option(None, "--name", help="Optional local node name to register directly."),
 ) -> None:
-    """Initialize this installation as a controller node or managed node."""
+    """Initialize this installation before normal use.
+
+    This sets:
+      - the local runtime role: `controller` or `managed`
+      - the local node name used in status, inventory, and pairing output
+
+    Run this once after the first install, or run it again later to rename the
+    local node or switch its local runtime role.
+    """
     _run_init(role=role, name=name)
 
 
 @role_app.command("show")
 def role_show_command(target: str | None = typer.Argument(None, help="Optional node name.")) -> None:
-    """Show the local role, or one registered node role."""
+    """Show the local runtime role, or the role of one registered node."""
     if target is None:
         _print_local_role()
         return
@@ -940,7 +1106,7 @@ def role_show_command(target: str | None = typer.Argument(None, help="Optional n
 
 @role_app.command("list")
 def role_list_command() -> None:
-    """List registered nodes and their roles."""
+    """List all registered nodes with their runtime roles."""
     _require_role("controller")
     nodes = _inventory_nodes()
     if not nodes:
@@ -968,7 +1134,7 @@ def role_edit_command(
     target_or_role: str = typer.Argument(..., help="Local role value, or a node name when editing a registered node."),
     runtime_role: str | None = typer.Argument(None, help="New role for the selected registered node."),
 ) -> None:
-    """Edit the local role, or one registered node role."""
+    """Edit the local runtime role, or the role of one registered node."""
     if runtime_role is None:
         _set_local_role(target_or_role)
         return
@@ -986,7 +1152,16 @@ def node_edit_command(
     field: str = typer.Argument(..., help="Field to edit: name or role."),
     value: str = typer.Argument(..., help="New value."),
 ) -> None:
-    """Edit one registered node."""
+    """Edit one registered node.
+
+    Supported fields:
+      - name
+      - role
+
+    Examples:
+      homebase node edit host.app name host.api
+      homebase node edit host.app role managed
+    """
     normalized = field.strip().lower()
     if normalized == "name":
         _require_role("controller")
@@ -1013,7 +1188,7 @@ def node_edit_command(
 
 @group_app.command("list")
 def group_list_command() -> None:
-    """List groups for comparison."""
+    """List all defined groups for comparison."""
     _require_role("controller")
     groups = load_role_groups()
     if not groups:
@@ -1038,14 +1213,17 @@ def group_list_command() -> None:
 
 @group_app.command("show")
 def group_show_command(group: str = typer.Argument(..., help="Group name.")) -> None:
-    """Show one group."""
+    """Show one group in detail.
+
+    The detailed view includes parents, children, assigned nodes, and description.
+    """
     _require_role("controller")
     _show_group_details(group)
 
 
 @group_app.command("add")
 def group_add_command(group: str = typer.Argument(..., help="New group name.")) -> None:
-    """Add one group."""
+    """Create one new group."""
     _require_role("controller")
     try:
         created = add_role_group(name=group, description="")
@@ -1060,7 +1238,12 @@ def group_edit_command(
     field: str = typer.Argument(..., help="Field to edit: name or description."),
     value: str = typer.Argument(..., help="New value."),
 ) -> None:
-    """Edit one group."""
+    """Edit one group.
+
+    Supported fields:
+      - name
+      - description
+    """
     _require_role("controller")
     normalized = field.strip().lower()
     try:
@@ -1090,7 +1273,7 @@ def group_remove_command(group: str = typer.Argument(..., help="Group name.")) -
 
 @link_app.command("list")
 def link_list_command() -> None:
-    """List parent-child group links."""
+    """List all parent-child links between groups."""
     _require_role("controller")
     groups = load_role_groups()
     table = Table(show_header=True, header_style="bold")
@@ -1113,7 +1296,7 @@ def link_list_command() -> None:
 
 @link_app.command("show")
 def link_show_command(parent: str = typer.Argument(..., help="Parent group name.")) -> None:
-    """Show the links beneath one parent group."""
+    """Show all direct child links for one parent group."""
     _require_role("controller")
     group = _find_group(parent)
     if group is None:
@@ -1137,7 +1320,7 @@ def link_add_command(
     parent: str = typer.Argument(..., help="Parent group."),
     child: str = typer.Argument(..., help="Child group."),
 ) -> None:
-    """Add one group-to-group link."""
+    """Link one child group beneath one parent group."""
     _require_role("controller")
     try:
         link_role_group(parent, child)
@@ -1151,7 +1334,7 @@ def link_remove_command(
     parent: str = typer.Argument(..., help="Parent group."),
     child: str = typer.Argument(..., help="Child group."),
 ) -> None:
-    """Remove one group-to-group link."""
+    """Remove one parent-child link between groups."""
     _require_role("controller")
     try:
         unlink_role_group(parent, child)
@@ -1190,7 +1373,10 @@ def node_unassign_command(
 
 @inventory_app.command("show")
 def inventory_show_command() -> None:
-    """Show the ansible inventory YAML."""
+    """Render and print the ansible inventory YAML.
+
+    Use this when you want to inspect the exact YAML that ansible commands will use.
+    """
     _require_role("controller")
     target = write_ansible_inventory()
     console.print(f"[green]Inventory YAML:[/green] {target}")
@@ -1199,7 +1385,7 @@ def inventory_show_command() -> None:
 
 @inventory_app.command("edit")
 def inventory_edit_command() -> None:
-    """Open the ansible inventory YAML in the configured editor."""
+    """Render the ansible inventory YAML and open it in `$EDITOR` for manual edits."""
     _require_role("controller")
     target = open_ansible_inventory()
     console.print(f"[green]Opened ansible inventory:[/green] {target}")
@@ -1207,7 +1393,7 @@ def inventory_edit_command() -> None:
 
 @state_app.command("show")
 def state_show_command(resource: str = typer.Argument(..., help="Resource path such as host.app.")) -> None:
-    """Show saved state values for one registered node."""
+    """Show saved operator state values for one registered node."""
     _require_role("controller")
     node = find_node(resource)
     if node is None:
@@ -1230,7 +1416,7 @@ def state_set_command(
     key: str = typer.Argument(..., help="State key."),
     value: str = typer.Argument(..., help="State value."),
 ) -> None:
-    """Set one saved state value on one registered node."""
+    """Set one saved operator state value on one registered node."""
     _require_role("controller")
     try:
         set_node_state(resource, key, value)
@@ -1244,7 +1430,7 @@ def state_unset_command(
     resource: str = typer.Argument(..., help="Resource path such as host.app."),
     key: str = typer.Argument(..., help="State key."),
 ) -> None:
-    """Remove one saved state value from one registered node."""
+    """Remove one saved operator state value from one registered node."""
     _require_role("controller")
     try:
         unset_node_state(resource, key)
@@ -1257,7 +1443,7 @@ def state_unset_command(
 def package_status_command(
     resource: str | None = typer.Argument(None, help="Optional resource path."),
 ) -> None:
-    """Show the currently installed homebase revision on this node or one managed node."""
+    """Show the installed homebase revision on this node or on one managed node."""
     if resource is not None:
         _require_role("controller")
         node, port = _resolve_remote_package_target(resource)
@@ -1307,7 +1493,10 @@ def package_versions_command(
     repo_url: str = typer.Option(DEFAULT_REPO_URL, "--repo", help="GitHub repository URL."),
     include_prerelease: bool = typer.Option(False, "--pre-release", help="Include prerelease GitHub releases."),
 ) -> None:
-    """List installable GitHub refs with short release notes."""
+    """List installable GitHub refs with short release notes.
+
+    This is the place to look before `homebase package install --ref ...`.
+    """
     try:
         versions = github_versions(repo_url, include_prerelease=include_prerelease)
     except RuntimeError as exc:
@@ -1399,7 +1588,13 @@ def package_install_command(
     python_bin: str | None = typer.Option(None, "--python", help="Explicit Python executable to install into. Defaults to the current Python environment."),
     include_prerelease: bool = typer.Option(False, "--pre-release", help="Include prerelease GitHub releases when choosing interactively."),
 ) -> None:
-    """Install one GitHub ref, or choose a version interactively."""
+    """Install one GitHub ref, or choose one interactively.
+
+    Examples:
+      homebase package install --ref main
+      homebase package install --ref v0.1.8
+      homebase package install host.app --ref main
+    """
     selected_summary: str | None = None
     selected_ref = ref
     if selected_ref is None:
@@ -1451,7 +1646,11 @@ def package_update_command(
     python_bin: str | None = typer.Option(None, "--python", help="Explicit Python executable to install into. Defaults to the current Python environment."),
     include_prerelease: bool = typer.Option(False, "--pre-release", help="Allow prerelease versions when selecting the latest target."),
 ) -> None:
-    """Update to the latest GitHub release, or default branch when no release exists."""
+    """Update to the latest available GitHub target.
+
+    If the repo has releases or tags, the newest one is used.
+    Otherwise the default branch is used.
+    """
     try:
         latest = latest_github_version(repo_url, include_prerelease=include_prerelease)
     except RuntimeError as exc:
@@ -1504,7 +1703,7 @@ def dev_self_test_command() -> None:
 
 
 def _build_node_app() -> typer.Typer:
-    runtime_node_app = typer.Typer(invoke_without_command=True, help="Inspect and manage registered nodes.")
+    runtime_node_app = typer.Typer(invoke_without_command=True, help=node_app.info.help)
     runtime_node_app.callback()(node_callback)
     runtime_node_app.command("list")(node_list_command)
     runtime_node_app.command("show")(node_show_command)
@@ -1515,7 +1714,7 @@ def _build_node_app() -> typer.Typer:
 
 
 def _build_connect_app() -> typer.Typer:
-    runtime_connect_app = typer.Typer(invoke_without_command=True, help="Connect controllers and managed nodes.")
+    runtime_connect_app = typer.Typer(invoke_without_command=True, help=connect_app.info.help)
     runtime_connect_app.callback()(connect_callback)
     current_role = _current_runtime_role()
     if current_role != "managed":
@@ -1530,7 +1729,7 @@ def _build_connect_app() -> typer.Typer:
 
 
 def _build_group_app() -> typer.Typer:
-    runtime_group_app = typer.Typer(invoke_without_command=True, help="Inspect and manage groups.")
+    runtime_group_app = typer.Typer(invoke_without_command=True, help=group_app.info.help)
     runtime_group_app.callback()(group_callback)
     runtime_group_app.command("list")(group_list_command)
     runtime_group_app.command("show")(group_show_command)
@@ -1541,7 +1740,7 @@ def _build_group_app() -> typer.Typer:
 
 
 def _build_link_app() -> typer.Typer:
-    runtime_link_app = typer.Typer(invoke_without_command=True, help="Inspect and manage parent-child group links.")
+    runtime_link_app = typer.Typer(invoke_without_command=True, help=link_app.info.help)
     runtime_link_app.callback()(link_callback)
     runtime_link_app.command("list")(link_list_command)
     runtime_link_app.command("show")(link_show_command)
@@ -1551,7 +1750,7 @@ def _build_link_app() -> typer.Typer:
 
 
 def _build_role_app() -> typer.Typer:
-    runtime_role_app = typer.Typer(invoke_without_command=True, help="Inspect and manage local or registered node roles.")
+    runtime_role_app = typer.Typer(invoke_without_command=True, help=role_app.info.help)
     runtime_role_app.callback()(role_callback)
     runtime_role_app.command("list")(role_list_command)
     runtime_role_app.command("show")(role_show_command)
@@ -1562,7 +1761,7 @@ def _build_role_app() -> typer.Typer:
 def _build_package_app() -> typer.Typer:
     runtime_package_app = typer.Typer(
         invoke_without_command=True,
-        help="Check installed homebase revisions and install or update from GitHub.",
+        help=package_app.info.help,
     )
     runtime_package_app.callback()(package_callback)
     runtime_package_app.command("status")(package_status_command)
@@ -1574,7 +1773,7 @@ def _build_package_app() -> typer.Typer:
 
 
 def _build_dev_app() -> typer.Typer:
-    runtime_dev_app = typer.Typer(help="Development and internal commands.")
+    runtime_dev_app = typer.Typer(help=dev_app.info.help)
     runtime_dev_app.command("self-test")(dev_self_test_command)
     runtime_dev_app.command("docs")(docs_command)
     runtime_dev_app.add_typer(ansible_app, name="ansible")
@@ -1582,7 +1781,7 @@ def _build_dev_app() -> typer.Typer:
 
 
 def _build_root_app() -> typer.Typer:
-    runtime_app = typer.Typer(no_args_is_help=True, help="Manage homebase controller and managed nodes.")
+    runtime_app = typer.Typer(no_args_is_help=True, help=app.info.help)
     runtime_app.command("init")(init_command)
     runtime_app.command("status")(status_command)
     runtime_app.add_typer(_build_role_app(), name="role")

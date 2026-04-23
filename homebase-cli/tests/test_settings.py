@@ -5,9 +5,9 @@ from homebase_cli.settings import Settings, load_settings, runtime_roles, save_s
 
 def test_save_and_load_settings_round_trip(tmp_path: Path) -> None:
     path = tmp_path / "settings.toml"
-    save_settings(Settings(role="control", node_name="control", package_location="/tmp/packages"), path)
+    save_settings(Settings(role="controller", node_name="control", package_location="/tmp/packages"), path)
     loaded = load_settings(path)
-    assert loaded.role == "control"
+    assert loaded.role == "controller"
     assert loaded.node_name == "control"
     assert loaded.package_location == "/tmp/packages"
 
@@ -31,4 +31,4 @@ def test_set_role_normalizes_client_to_managed(tmp_path: Path) -> None:
 
 
 def test_runtime_roles_are_fixed() -> None:
-    assert runtime_roles() == ("control", "managed")
+    assert runtime_roles() == ("controller", "managed")

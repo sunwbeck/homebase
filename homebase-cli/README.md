@@ -18,19 +18,21 @@ homebase init
 homebase role show
 homebase role list
 homebase status
-homebase inventory
+homebase inventory --help
 homebase package status
 homebase package versions
 ```
 
-Client side:
+Managed node:
 
 ```bash
 homebase connect code --refresh
-homebase connect serve
+homebase connect status
+homebase service start
+homebase service status
 ```
 
-Control side:
+Controller node:
 
 ```bash
 homebase status
@@ -85,3 +87,5 @@ If you need the current repo version installed locally again:
 ```bash
 bash ../scripts/install-homebase.sh
 ```
+
+The goal for the CLI help is self-guided operation. `homebase --help` and each subcommand help screen should be enough for an operator or an LLM to find the next command without external notes.

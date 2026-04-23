@@ -33,7 +33,7 @@ def test_add_node_persists_to_registry(tmp_path: Path) -> None:
     assert nodes[0].name == "control"
     assert nodes[0].runtime_hostname == "controlpi"
     assert nodes[0].node_id == "abc123"
-    assert nodes[0].runtime_role == "control"
+    assert nodes[0].runtime_role == "controller"
     assert nodes[0].open_ports == (22, 8080)
     assert nodes[0].services == ("ssh", "docker")
 
@@ -71,17 +71,17 @@ def test_rename_and_runtime_role_update_persist_in_registry(tmp_path: Path) -> N
     add_node(name="host", kind="host", path=path)
     add_node(name="host.app", parent="host", kind="vm", path=path)
     renamed = rename_node("host.app", "host.api", path=path)
-    updated = set_node_runtime_role("host.api", "control", path=path)
+    updated = set_node_runtime_role("host.api", "controller", path=path)
     nodes = load_nodes(path)
     assert renamed.name == "host.api"
-    assert updated.runtime_role == "control"
+    assert updated.runtime_role == "controller"
     api_node = next(node for node in nodes if node.name == "host.api")
-    assert api_node.runtime_role == "control"
+    assert api_node.runtime_role == "controller"
 
 
 def test_ensure_local_node_creates_and_renames_local_entry(tmp_path: Path) -> None:
     path = tmp_path / "nodes.toml"
-    created = ensure_local_node("control", "control", runtime_hostname="controlbox", path=path)
+    created = ensure_local_node("control", "controller", runtime_hostname="controlbox", path=path)
     renamed = ensure_local_node("workstation", "managed", runtime_hostname="wsbox", previous_name="control", path=path)
     nodes = load_nodes(path)
     assert created.name == "control"

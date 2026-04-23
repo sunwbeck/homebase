@@ -154,6 +154,7 @@ This checklist exists so `homebase` CLI work can continue as if one person had b
 - `[~]` add unit tests for resource parsing
 - `[~]` add unit tests for config loading
 - `[~]` add unit tests for command routing
+- `[~]` add unit tests for help output and command discoverability
 - `[ ]` add unit tests for output formatting
 - `[~]` define a minimal integration test procedure
 
