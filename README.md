@@ -93,7 +93,12 @@ homebase inventory link host-node app-tier --add
 homebase inventory assign host.app app-tier --add
 homebase inventory type host.app --edit managed
 homebase inventory name host.app --edit host.api
+homebase inventory file
+homebase inventory file --write
+homebase inventory file --open
 ```
+
+`homebase inventory file --write` writes the current inventory out as ansible YAML.
 
 `homebase state` stores simple key/value labels on registered nodes.
 

@@ -22,7 +22,7 @@ from homebase_cli.client import (
     serve_client,
 )
 from homebase_cli.docs_reader import docs_root, get_doc, list_docs
-from homebase_cli.inventory import ansible_ping, write_ansible_inventory
+from homebase_cli.inventory import ansible_inventory_path, ansible_ping, open_ansible_inventory, write_ansible_inventory
 from homebase_cli.output import print_docs_table, print_node_tree, print_resource_table, print_scan_table
 from homebase_cli.packaging import (
     DEFAULT_REPO_URL,
@@ -443,10 +443,10 @@ def info_command(resource: str = typer.Argument(..., help="Canonical resource pa
 def ansible_inventory_command(
     output: Path | None = typer.Option(None, "--output", help="Optional output path for the rendered inventory."),
 ) -> None:
-    """Render the current node registry as an ansible inventory."""
+    """Render the current node registry as an ansible YAML inventory."""
     _require_role("control")
     if output is None:
-        output = Path("inventory.ini")
+        output = Path("inventory.yml")
     write_ansible_inventory(output)
     console.print(f"[green]Wrote ansible inventory to {output}[/green]")
 
@@ -759,6 +759,24 @@ def inventory_assign_command(
             console.print(f"[green]Removed node assignment:[/green] {resource} from {group.strip().lower()}")
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
+
+
+@inventory_app.command("file")
+def inventory_file_command(
+    write: bool = typer.Option(False, "--write", help="Write the current ansible inventory YAML file."),
+    open_file: bool = typer.Option(False, "--open", help="Open the ansible inventory YAML file in $EDITOR after writing it."),
+) -> None:
+    """Show, write, or open the ansible inventory YAML file."""
+    _require_role("control")
+    if open_file:
+        target = open_ansible_inventory()
+        console.print(f"[green]Opened ansible inventory:[/green] {target}")
+        return
+    if write:
+        target = write_ansible_inventory()
+        console.print(f"[green]Wrote ansible inventory:[/green] {target}")
+        return
+    console.print(ansible_inventory_path())
 
 
 @state_app.command("show")
