@@ -63,6 +63,7 @@ class ClientProfile:
     open_ports: tuple[int, ...] = ()
     services: tuple[str, ...] = ()
     exposed_endpoints: tuple[tuple[int, str, str | None], ...] = ()
+    endpoint_records: tuple[tuple[int, str, str | None, int | None], ...] = ()
     service_records: tuple[tuple[str, str, int | None, str, str], ...] = ()
 
 
@@ -311,8 +312,8 @@ def _interface_addresses() -> dict[str, str]:
     return {}
 
 
-def detect_exposed_endpoints() -> tuple[tuple[int, str, str | None], ...]:
-    """Return externally reachable listening endpoints as (port, purpose, owner)."""
+def _socket_listing_output() -> str:
+    """Return listening socket output, retrying with sudo when process info is hidden."""
     proc = subprocess.run(
         ["ss", "-ltnpH"],
         check=False,
@@ -320,10 +321,32 @@ def detect_exposed_endpoints() -> tuple[tuple[int, str, str | None], ...]:
         text=True,
     )
     if proc.returncode != 0:
+        return ""
+    stdout = proc.stdout
+    if "pid=" in stdout or os.geteuid() == 0:
+        return stdout
+    sudo = shutil.which("sudo")
+    if sudo is None:
+        return stdout
+    sudo_proc = subprocess.run(
+        [sudo, "-n", "ss", "-ltnpH"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if sudo_proc.returncode == 0 and "pid=" in sudo_proc.stdout:
+        return sudo_proc.stdout
+    return stdout
+
+
+def detect_endpoint_records() -> tuple[tuple[int, str, str | None, int | None], ...]:
+    """Return externally reachable listening endpoints as (port, purpose, owner, pid)."""
+    stdout = _socket_listing_output()
+    if not stdout:
         return ()
     interface_by_address = _interface_addresses()
-    endpoints: dict[int, tuple[int, str, str | None]] = {}
-    for line in proc.stdout.splitlines():
+    endpoints: dict[tuple[int, int | None], tuple[int, str, str | None, int | None]] = {}
+    for line in stdout.splitlines():
         parts = line.split()
         if len(parts) < 4:
             continue
@@ -340,16 +363,28 @@ def detect_exposed_endpoints() -> tuple[tuple[int, str, str | None], ...]:
             continue
         process_blob = " ".join(parts[5:]).strip()
         owner = None
+        pid = None
         for pattern in (r'users:\(\("([^"]+)"', r'\(\("([^"]+)"'):
             owner_match = re.search(pattern, process_blob)
             if owner_match is not None:
                 owner = owner_match.group(1).strip()
                 break
+        pid_match = re.search(r"pid=(\d+)", process_blob)
+        if pid_match is not None:
+            pid = int(pid_match.group(1))
         if owner is None and process_blob:
             owner = process_blob.strip() or None
         fallback_owner = owner or interface_by_address.get(normalized_host)
-        endpoints[port] = (port, describe_port(port, fallback_owner), owner)
-    return tuple(sorted(endpoints.values(), key=lambda item: item[0]))
+        endpoints[(port, pid)] = (port, describe_port(port, fallback_owner), owner, pid)
+    return tuple(sorted(endpoints.values(), key=lambda item: (item[0], item[3] or -1)))
+
+
+def detect_exposed_endpoints() -> tuple[tuple[int, str, str | None], ...]:
+    """Return externally reachable listening endpoints as (port, purpose, owner)."""
+    deduped: dict[int, tuple[int, str, str | None]] = {}
+    for port, purpose, owner, _ in detect_endpoint_records():
+        deduped.setdefault(port, (port, purpose, owner))
+    return tuple(sorted(deduped.values(), key=lambda item: item[0]))
 
 
 def detect_exposed_services() -> tuple[str, ...]:
@@ -462,7 +497,8 @@ def local_discovery() -> ClientDiscovery:
 def local_profile() -> ClientProfile:
     """Build the full client profile for paired controllers."""
     discovery = local_discovery()
-    exposed_endpoints = detect_exposed_endpoints()
+    endpoint_records = detect_endpoint_records()
+    exposed_endpoints = tuple((port, purpose, owner) for port, purpose, owner, _ in endpoint_records)
     service_records = detect_service_records()
     return ClientProfile(
         node_id=discovery.node_id,
@@ -473,6 +509,7 @@ def local_profile() -> ClientProfile:
         open_ports=tuple(port for port, _, _ in exposed_endpoints),
         services=tuple(dict.fromkeys([name for name, state, _, _, _ in service_records if state == "running"])),
         exposed_endpoints=exposed_endpoints,
+        endpoint_records=endpoint_records,
         service_records=service_records,
     )
 
@@ -509,6 +546,7 @@ def parse_profile_payload(payload: dict[str, Any]) -> ClientProfile:
     raw_open_ports = payload.get("open_ports", ())
     raw_services = payload.get("services", ())
     raw_exposed_endpoints = payload.get("exposed_endpoints", ())
+    raw_endpoint_records = payload.get("endpoint_records", ())
     raw_service_records = payload.get("service_records", ())
     open_ports = tuple(sorted(int(port) for port in raw_open_ports))
     services = tuple(str(service).strip() for service in raw_services if str(service).strip())
@@ -526,6 +564,22 @@ def parse_profile_payload(payload: dict[str, Any]) -> ClientProfile:
         exposed_endpoints.append((port_value, purpose, owner))
     if not exposed_endpoints and open_ports:
         exposed_endpoints = [(port, describe_port(port), None) for port in open_ports]
+    endpoint_records: list[tuple[int, str, str | None, int | None]] = []
+    for item in raw_endpoint_records:
+        if not isinstance(item, dict):
+            continue
+        try:
+            port_value = int(item.get("port"))
+        except (TypeError, ValueError):
+            continue
+        purpose = str(item.get("purpose", "")).strip() or describe_port(port_value)
+        owner_raw = item.get("owner")
+        owner = str(owner_raw).strip() if owner_raw not in (None, "") else None
+        pid_raw = item.get("pid")
+        pid = int(pid_raw) if isinstance(pid_raw, int) or (isinstance(pid_raw, str) and str(pid_raw).isdigit()) else None
+        endpoint_records.append((port_value, purpose, owner, pid))
+    if not endpoint_records and exposed_endpoints:
+        endpoint_records = [(port, purpose, owner, None) for port, purpose, owner in exposed_endpoints]
     service_records: list[tuple[str, str, int | None, str, str]] = []
     for item in raw_service_records:
         if not isinstance(item, dict):
@@ -549,6 +603,7 @@ def parse_profile_payload(payload: dict[str, Any]) -> ClientProfile:
         open_ports=open_ports,
         services=services,
         exposed_endpoints=tuple(sorted(exposed_endpoints, key=lambda item: item[0])),
+        endpoint_records=tuple(sorted(endpoint_records, key=lambda item: (item[0], item[3] or -1))),
         service_records=tuple(sorted(service_records, key=lambda item: (item[3], item[0]))),
     )
 
@@ -668,6 +723,15 @@ def profile_payload() -> dict[str, Any]:
     """Return the current full profile payload."""
     profile = local_profile()
     payload = asdict(profile)
+    payload["endpoint_records"] = [
+        {
+            "port": port,
+            "purpose": purpose,
+            "owner": owner,
+            "pid": pid,
+        }
+        for port, purpose, owner, pid in profile.endpoint_records
+    ]
     payload["service_records"] = [
         {
             "name": name,

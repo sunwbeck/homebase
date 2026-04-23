@@ -219,17 +219,23 @@ def _normalize_service_key(value: str) -> str:
 def _service_rows(snapshot: dict[str, object]) -> list[dict[str, object]]:
     """Return normalized service rows for one node snapshot."""
     endpoints = tuple(snapshot["endpoints"])
-    endpoint_map: dict[str, list[tuple[int, str, str | None]]] = {}
-    for endpoint in endpoints:
-        port, purpose, owner = endpoint
+    endpoint_records = tuple(snapshot.get("endpoint_records") or ())
+    endpoint_map: dict[str, list[tuple[int, str, str | None, int | None]]] = {}
+    endpoint_pid_map: dict[int, list[tuple[int, str, str | None, int | None]]] = {}
+    for endpoint in endpoint_records:
+        port, purpose, owner, pid = endpoint
         for candidate in filter(None, {_normalize_service_key(purpose), _normalize_service_key(owner or "")}):
             endpoint_map.setdefault(candidate, []).append(endpoint)
+        if pid is not None:
+            endpoint_pid_map.setdefault(pid, []).append(endpoint)
 
     rows: list[dict[str, object]] = []
-    matched_endpoints: set[tuple[int, str, str | None]] = set()
+    matched_endpoints: set[tuple[int, str, str | None, int | None]] = set()
     for name, state, pid, kind, description in tuple(snapshot["service_records"]):
         key = _normalize_service_key(name)
-        matched = tuple(endpoint_map.get(key, ()))
+        matched = tuple(endpoint_pid_map.get(pid, ())) if pid is not None else ()
+        if not matched:
+            matched = tuple(endpoint_map.get(key, ()))
         matched_endpoints.update(matched)
         rows.append(
             {
@@ -238,22 +244,22 @@ def _service_rows(snapshot: dict[str, object]) -> list[dict[str, object]]:
                 "pid": pid,
                 "kind": kind,
                 "description": description,
-                "endpoints": matched,
+                "endpoints": tuple((port, purpose, owner) for port, purpose, owner, _ in matched),
             }
         )
 
-    for endpoint in endpoints:
+    for endpoint in endpoint_records:
         if endpoint in matched_endpoints:
             continue
-        port, purpose, owner = endpoint
+        port, purpose, owner, pid = endpoint
         rows.append(
             {
                 "name": purpose,
                 "state": "listening",
-                "pid": None,
+                "pid": pid,
                 "kind": "endpoint",
                 "description": owner or "",
-                "endpoints": (endpoint,),
+                "endpoints": ((port, purpose, owner),),
             }
         )
     return rows
@@ -304,6 +310,9 @@ def _node_runtime_snapshot(node):
     endpoints = detect_exposed_endpoints() if profile is not None else (
         node.exposed_endpoints or tuple((port, describe_port(port), None) for port in node.open_ports)
     )
+    endpoint_records = tuple(profile.endpoint_records) if profile is not None else (
+        node.endpoint_records or tuple((port, purpose, owner, None) for port, purpose, owner in endpoints)
+    )
     services = tuple(profile.services) if profile is not None else node.services
     all_services = tuple(detect_running_services()) if is_local else services
     service_records = tuple(profile.service_records) if profile is not None else (
@@ -317,6 +326,7 @@ def _node_runtime_snapshot(node):
         "all_services": all_services,
         "service_records": service_records,
         "endpoints": endpoints,
+        "endpoint_records": endpoint_records,
         "is_local": is_local,
     }
 
@@ -340,6 +350,7 @@ def _inventory_nodes():
                     open_ports=profile.open_ports,
                     services=profile.services,
                     exposed_endpoints=profile.exposed_endpoints,
+                    endpoint_records=profile.endpoint_records,
                 )
             )
         except Exception:
@@ -824,6 +835,7 @@ def node_add_command(
             open_ports=profile.open_ports,
             services=profile.services,
             exposed_endpoints=profile.exposed_endpoints,
+            endpoint_records=profile.endpoint_records,
             service_records=profile.service_records,
         )
     except ValueError as exc:

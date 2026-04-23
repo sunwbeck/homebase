@@ -99,6 +99,7 @@ def test_pair_with_client_returns_profile(monkeypatch) -> None:
         open_ports=(22,),
         services=("ssh",),
         exposed_endpoints=((22, "ssh", None),),
+        endpoint_records=((22, "ssh", None, None),),
         service_records=(("ssh", "running", None, "service", ""),),
     )
     monkeypatch.setattr(

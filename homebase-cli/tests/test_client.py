@@ -5,6 +5,7 @@ from homebase_cli.client import (
     ClientState,
     PackageInstallRequest,
     PairRequest,
+    detect_endpoint_records,
     detect_exposed_endpoints,
     load_client_state,
     pair_controller,
@@ -75,6 +76,25 @@ def test_state_path_uses_environment_override(tmp_path: Path, monkeypatch) -> No
 
 
 def test_detect_exposed_endpoints_falls_back_to_interface_name_when_owner_hidden(monkeypatch) -> None:
+    def fake_run(args, **kwargs):
+        if args[:2] == ["ss", "-ltnpH"]:
+            return SimpleNamespace(
+                returncode=0,
+                stdout="LISTEN 0 4096 100.93.33.36:38339 0.0.0.0:*\n",
+                stderr="",
+            )
+        return SimpleNamespace(
+            returncode=0,
+            stdout="tailscale0 UP 100.93.33.36/32 fd7a:115c:a1e0::b237:2124/128\n",
+            stderr="",
+        )
+
+    monkeypatch.setattr("homebase_cli.client.subprocess.run", fake_run)
+    endpoints = detect_exposed_endpoints()
+    assert endpoints == ((38339, "tailscale0", None),)
+
+
+def test_detect_endpoint_records_uses_sudo_when_plain_ss_hides_processes(monkeypatch) -> None:
     outputs = iter(
         [
             SimpleNamespace(
@@ -84,11 +104,19 @@ def test_detect_exposed_endpoints_falls_back_to_interface_name_when_owner_hidden
             ),
             SimpleNamespace(
                 returncode=0,
+                stdout='LISTEN 0 4096 100.93.33.36:38339 0.0.0.0:* users:(("tailscaled",pid=30787,fd=23))\n',
+                stderr="",
+            ),
+            SimpleNamespace(
+                returncode=0,
                 stdout="tailscale0 UP 100.93.33.36/32 fd7a:115c:a1e0::b237:2124/128\n",
                 stderr="",
             ),
         ]
     )
+
+    monkeypatch.setattr("homebase_cli.client.os.geteuid", lambda: 1000)
+    monkeypatch.setattr("homebase_cli.client.shutil.which", lambda name: "/usr/bin/sudo" if name == "sudo" else None)
     monkeypatch.setattr("homebase_cli.client.subprocess.run", lambda *args, **kwargs: next(outputs))
-    endpoints = detect_exposed_endpoints()
-    assert endpoints == ((38339, "tailscale0", None),)
+    endpoints = detect_endpoint_records()
+    assert endpoints == ((38339, "tailscaled", "tailscaled", 30787),)

@@ -398,6 +398,7 @@ def test_service_list_shows_local_services(monkeypatch) -> None:
                 platform="Linux 6.1",
                 version="0.1.8",
                 services=("ssh", "docker"),
+                endpoint_records=((22, "ssh", "sshd", 111), (8428, "homebase", "python", 222)),
                 service_records=(("ssh", "running", 111, "systemd", "OpenSSH server"), ("docker", "running", None, "docker", "Docker Engine")),
             ),
         )
@@ -413,8 +414,10 @@ def test_service_list_shows_local_services(monkeypatch) -> None:
         assert "docker" in result.stdout
         assert "running" in result.stdout
         assert "111" in result.stdout
-        assert "8428" in result.stdout
+        assert "22" in result.stdout
         assert "OpenSSH server" in result.stdout
+        assert "homebase" in result.stdout
+        assert "listening" in result.stdout
 
 
 def test_service_list_shows_non_running_records(monkeypatch) -> None:
@@ -459,6 +462,47 @@ def test_service_list_shows_non_running_records(monkeypatch) -> None:
         assert "ssh" in result.stdout
         assert "apt-daily" in result.stdout
         assert "dead" in result.stdout
+
+
+def test_service_list_matches_endpoints_by_pid(monkeypatch) -> None:
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        env = {"HOMEBASE_SETTINGS_PATH": "settings.toml", "COLUMNS": "240"}
+        Path("settings.toml").write_text('role = "managed"\nnode_name = "app"\n', encoding="utf-8")
+        app = load_app(monkeypatch, "settings.toml")
+        monkeypatch.setattr(
+            "homebase_cli.cli.find_node",
+            lambda name: SimpleNamespace(
+                name="app",
+                address="192.168.0.20",
+                runtime_hostname="app",
+                platform="Linux 6.1",
+                open_ports=(80, 443),
+                services=("caddy",),
+                exposed_endpoints=((80, "http", "caddy"), (443, "https", "caddy")),
+                endpoint_records=((80, "http", "caddy", 37120), (443, "https", "caddy", 37120)),
+                service_records=(("caddy", "running", 37120, "systemd", "Caddy"),),
+            ),
+        )
+        monkeypatch.setattr(
+            "homebase_cli.cli.local_profile",
+            lambda: ClientProfile(
+                node_id="node-1",
+                hostname="app",
+                platform="Linux 6.1",
+                version="0.1.8",
+                services=("caddy",),
+                endpoint_records=((80, "http", "caddy", 37120), (443, "https", "caddy", 37120)),
+                service_records=(("caddy", "running", 37120, "systemd", "Caddy"),),
+            ),
+        )
+        result = runner.invoke(app, ["service", "list"], env=env)
+        assert result.exit_code == 0
+        assert "caddy" in result.stdout
+        assert "80, 443" in result.stdout
+        assert "http" not in result.stdout
+        assert "https" not in result.stdout
+        assert "listening" not in result.stdout
 
 
 def test_service_list_marks_nodes_without_endpoints(monkeypatch) -> None:
