@@ -6,6 +6,7 @@ git_ref="main"
 subdirectory="homebase-cli"
 python_bin=""
 managed_venv="${HOME}/.local/share/homebase-cli/.venv"
+work_dir=""
 
 run_privileged() {
   if [[ "$(id -u)" -eq 0 ]]; then
@@ -35,17 +36,13 @@ install_venv_support() {
   run_privileged apt-get install -y python3-venv
 }
 
-install_git_support() {
-  if command -v git >/dev/null 2>&1; then
-    return 0
+cleanup() {
+  if [[ -n "${work_dir}" && -d "${work_dir}" ]]; then
+    rm -rf "${work_dir}"
   fi
-  if ! command -v apt-get >/dev/null 2>&1; then
-    return 1
-  fi
-  echo "Installing git"
-  run_privileged apt-get update
-  run_privileged apt-get install -y git
 }
+
+trap cleanup EXIT
 
 usage() {
   cat <<'EOF'
@@ -101,7 +98,8 @@ if [[ -z "${python_bin}" ]]; then
   fi
 fi
 
-install_target="git+${repo_url}@${git_ref}#subdirectory=${subdirectory}"
+repo_root="${repo_url%.git}"
+archive_url="${repo_root}/archive/${git_ref}.tar.gz"
 
 if [[ -n "${VIRTUAL_ENV:-}" ]]; then
   install_python="${python_bin}"
@@ -122,18 +120,32 @@ else
   mkdir -p "${HOME}/.local/bin"
 fi
 
-if ! command -v git >/dev/null 2>&1; then
-  if ! install_git_support; then
-    echo >&2
-    echo "git is required to install homebase from GitHub." >&2
-    echo "Install git first, then rerun this installer." >&2
-    exit 1
-  fi
+if ! command -v curl >/dev/null 2>&1; then
+  echo >&2
+  echo "curl is required to install homebase from GitHub." >&2
+  exit 1
+fi
+
+if ! command -v tar >/dev/null 2>&1; then
+  echo >&2
+  echo "tar is required to unpack the homebase archive." >&2
+  exit 1
 fi
 
 "${install_python}" -m pip install --upgrade pip
+echo "Downloading homebase from ${repo_url}@${git_ref}"
+work_dir="$(mktemp -d)"
+archive_path="${work_dir}/homebase.tar.gz"
+curl -fsSL "${archive_url}" -o "${archive_path}"
+tar -xzf "${archive_path}" -C "${work_dir}"
+source_dir="$(find "${work_dir}" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
+if [[ -z "${source_dir}" || ! -d "${source_dir}/${subdirectory}" ]]; then
+  echo >&2
+  echo "Failed to unpack the homebase source tree from ${archive_url}." >&2
+  exit 1
+fi
 echo "Installing homebase from ${repo_url}@${git_ref}"
-"${install_python}" -m pip install --upgrade --force-reinstall --no-cache-dir "${install_target}"
+"${install_python}" -m pip install --upgrade --force-reinstall --no-cache-dir "${source_dir}/${subdirectory}"
 
 if [[ -z "${VIRTUAL_ENV:-}" ]]; then
   ln -sfn "${managed_venv}/bin/hb" "${HOME}/.local/bin/hb"
