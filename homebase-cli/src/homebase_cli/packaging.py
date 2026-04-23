@@ -13,6 +13,8 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tarfile
+import tempfile
 import time
 from typing import Any, Callable
 from urllib.error import HTTPError, URLError
@@ -132,7 +134,7 @@ def _run_logged(
 
 
 def _normalize_repo_url(repo_url: str) -> str:
-    """Return the canonical repo URL used for git install."""
+    """Return the canonical repo URL used for package operations."""
     normalized = repo_url.strip()
     if not normalized:
         raise ValueError("repo URL cannot be empty")
@@ -153,19 +155,59 @@ def github_repo_slug(repo_url: str) -> str:
     raise ValueError(f"unsupported GitHub repo URL: {repo_url}")
 
 
-def github_install_target(repo_url: str, ref: str, subdirectory: str = DEFAULT_SUBDIRECTORY) -> str:
-    """Return the pip install target for one GitHub ref."""
-    normalized_repo = _normalize_repo_url(repo_url)
+def github_archive_url(repo_url: str, ref: str) -> str:
+    """Return the GitHub tarball URL for one ref."""
     normalized_ref = ref.strip()
     if not normalized_ref:
         raise ValueError("git ref cannot be empty")
-    return f"git+{normalized_repo}@{normalized_ref}#subdirectory={subdirectory}"
+    normalized_repo = _normalize_repo_url(repo_url)
+    repo_root = normalized_repo[:-4] if normalized_repo.endswith(".git") else normalized_repo
+    return f"{repo_root}/archive/{quote(normalized_ref, safe='')}.tar.gz"
+
+
+def github_install_target(repo_url: str, ref: str, subdirectory: str = DEFAULT_SUBDIRECTORY) -> str:
+    """Return the GitHub tarball URL used to install one ref."""
+    _ = subdirectory
+    return github_archive_url(repo_url, ref)
 
 
 def install_command(repo_url: str, ref: str, python_bin: str = "python3") -> str:
     """Render a shell command that installs or updates one GitHub ref."""
     target = github_install_target(repo_url, ref)
-    return f"{shlex.quote(python_bin)} -m pip install --upgrade --force-reinstall --no-cache-dir {shlex.quote(target)}"
+    repo_name = github_repo_slug(repo_url).split("/")[-1]
+    return (
+        f'tmpdir="$(mktemp -d)" && '
+        f'curl -fsSL {shlex.quote(target)} | tar -xzf - -C "$tmpdir" && '
+        f'{shlex.quote(python_bin)} -m pip install --upgrade --force-reinstall --no-cache-dir '
+        f'"$tmpdir/{repo_name}-{ref}/{DEFAULT_SUBDIRECTORY}"'
+    )
+
+
+def _download_archive(url: str, destination: Path) -> None:
+    """Download one GitHub archive to disk."""
+    request = Request(url, headers={"User-Agent": "homebase-cli"})
+    with urlopen(request, timeout=30) as response:
+        destination.write_bytes(response.read())
+
+
+def _prepare_install_source(repo_url: str, ref: str, subdirectory: str = DEFAULT_SUBDIRECTORY) -> tuple[tempfile.TemporaryDirectory[str], Path]:
+    """Download and unpack one GitHub ref, returning the installable subdirectory."""
+    archive_url = github_archive_url(repo_url, ref)
+    tempdir = tempfile.TemporaryDirectory(prefix="homebase-install-")
+    root = Path(tempdir.name)
+    archive_path = root / "source.tar.gz"
+    _download_archive(archive_url, archive_path)
+    with tarfile.open(archive_path, "r:gz") as handle:
+        handle.extractall(root)
+    unpacked_dirs = [item for item in root.iterdir() if item.is_dir()]
+    if not unpacked_dirs:
+        tempdir.cleanup()
+        raise RuntimeError(f"failed to unpack the homebase source tree from {archive_url}")
+    install_root = unpacked_dirs[0] / subdirectory
+    if not install_root.is_dir():
+        tempdir.cleanup()
+        raise RuntimeError(f"missing install subdirectory `{subdirectory}` in {archive_url}")
+    return tempdir, install_root
 
 
 def _github_token() -> str | None:
@@ -400,13 +442,21 @@ def install_github_ref(
 ) -> tuple[LoggedResult, InstalledPackageStatus]:
     """Install or update from one GitHub ref and persist local install state."""
     interpreter = python_bin if python_bin is not None else sys.executable
-    target = github_install_target(repo_url, ref)
-    result = _run_logged(
-        [interpreter, "-m", "pip", "install", "--upgrade", "--force-reinstall", "--no-cache-dir", target],
-        cwd=Path.cwd(),
-        log_prefix="package-install",
-        on_tick=on_tick,
-    )
+    try:
+        source_dir_holder, install_root = _prepare_install_source(repo_url, ref)
+    except RuntimeError as exc:
+        log_path = _new_log_path("package-install")
+        _write_log(log_path, f"download/install preparation failed\n\n{exc}\n")
+        raise PackageOperationError(str(exc), log_path) from exc
+    try:
+        result = _run_logged(
+            [interpreter, "-m", "pip", "install", "--upgrade", "--force-reinstall", "--no-cache-dir", str(install_root)],
+            cwd=install_root,
+            log_prefix="package-install",
+            on_tick=on_tick,
+        )
+    finally:
+        source_dir_holder.cleanup()
     if result.returncode != 0:
         raise PackageOperationError("install failed", result.log_path)
     status = InstalledPackageStatus(
