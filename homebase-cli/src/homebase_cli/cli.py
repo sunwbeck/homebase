@@ -813,8 +813,8 @@ def node_scan_command(
 @connect_app.command("add")
 def node_add_command(
     name: str | None = typer.Argument(None, help="Canonical node name such as host.app."),
-    parent: str | None = typer.Option(None, "--parent", help="Optional parent node such as host."),
-    ssh_user: str | None = typer.Option(None, "--ssh-user", help="SSH user for the node."),
+    parent: str | None = typer.Option(None, "--parent", help="Optional parent node such as host. Omit this during initial pairing unless you already know the hierarchy."),
+    ssh_user: str | None = typer.Option(None, "--ssh-user", help="Optional SSH user to save for later remote commands. Omit this during initial pairing if unknown."),
     description: str = typer.Option("", "--description", help="Short human-readable description."),
     client_port: int = typer.Option(DEFAULT_CLIENT_PORT, "--client-port", help="TCP port exposed by the homebase client."),
 ) -> None:
@@ -832,8 +832,8 @@ def node_add_command(
         "Node name",
         default=(profile.node_name or selected.discovery.node_name or profile.hostname or selected.discovery.hostname),
     )
-    resolved_parent = parent if parent is not None else _choose_parent()
-    resolved_ssh_user = ssh_user if ssh_user is not None else typer.prompt("SSH user", default="", show_default=False).strip() or None
+    resolved_parent = parent.strip() if parent is not None and parent.strip() else None
+    resolved_ssh_user = ssh_user.strip() if ssh_user is not None and ssh_user.strip() else None
     resolved_description = description or typer.prompt(
         "Description",
         default=profile.description or "",

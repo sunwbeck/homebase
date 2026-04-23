@@ -120,6 +120,8 @@ def test_connect_add_uses_cached_discovery_and_pairing(monkeypatch) -> None:
         )
         assert result.exit_code == 0
         assert "Registered node host.app" in result.stdout
+        assert "Hierarchy" not in result.stdout
+        assert "SSH user" not in result.stdout
 
 
 def test_connect_add_fails_when_pairing_code_is_wrong(monkeypatch) -> None:
