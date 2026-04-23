@@ -600,6 +600,52 @@ def test_daemon_status_includes_local_identity(monkeypatch) -> None:
         assert "0.0.0.0:8428" in result.stdout
 
 
+def test_daemon_restart_reuses_runtime_host_and_port(monkeypatch) -> None:
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        env = {"HOMEBASE_SETTINGS_PATH": "settings.toml", "COLUMNS": "240"}
+        Path("settings.toml").write_text('role = "managed"\nnode_name = "app"\n', encoding="utf-8")
+        app = load_app(monkeypatch, "settings.toml")
+        runtime = ConnectRuntime(
+            pid=4321,
+            host="127.0.0.1",
+            port=9999,
+            started_at="2026-04-24T00:00:00Z",
+            log_path="/tmp/connect.log",
+        )
+        monkeypatch.setattr("homebase_cli.cli.connect_server_running", lambda: runtime)
+        stopped: list[int] = []
+        started: list[tuple[str, int, str]] = []
+        monkeypatch.setattr("homebase_cli.cli.stop_connect_server", lambda: (stopped.append(runtime.pid), runtime)[1])
+        monkeypatch.setattr(
+            "homebase_cli.cli._start_daemon_background",
+            lambda *, host, port, current_role: started.append((host, port, current_role)),
+        )
+        result = runner.invoke(app, ["daemon", "restart"], env=env)
+        assert result.exit_code == 0
+        assert stopped == [4321]
+        assert started == [("127.0.0.1", 9999, "managed")]
+        assert "stopped daemon (pid 4321)" in result.stdout
+
+
+def test_daemon_restart_starts_when_not_running(monkeypatch) -> None:
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        env = {"HOMEBASE_SETTINGS_PATH": "settings.toml", "COLUMNS": "240"}
+        Path("settings.toml").write_text('role = "controller"\nnode_name = "control"\n', encoding="utf-8")
+        app = load_app(monkeypatch, "settings.toml")
+        monkeypatch.setattr("homebase_cli.cli.connect_server_running", lambda: None)
+        started: list[tuple[str, int, str]] = []
+        monkeypatch.setattr(
+            "homebase_cli.cli._start_daemon_background",
+            lambda *, host, port, current_role: started.append((host, port, current_role)),
+        )
+        result = runner.invoke(app, ["daemon", "restart"], env=env)
+        assert result.exit_code == 0
+        assert started == [("0.0.0.0", 8428, "controller")]
+        assert "daemon was not running; starting a new instance" in result.stdout
+
+
 def test_connect_code_always_refreshes_and_shows_expiry(monkeypatch) -> None:
     runner = CliRunner()
     with runner.isolated_filesystem():

@@ -1418,36 +1418,8 @@ def _run_controller_service_forever() -> None:
         time.sleep(3600)
 
 
-@daemon_app.command("start")
-def daemon_start_command(
-    host: str = typer.Option("0.0.0.0", "--host", help="Listen address for the managed connect endpoint."),
-    port: int = typer.Option(DEFAULT_CLIENT_PORT, "--port", help="Listen port for the managed connect endpoint."),
-    foreground: bool = typer.Option(False, "--foreground", hidden=True),
-) -> None:
-    """Start the local background runtime for this node.
-
-    Managed nodes expose the connect endpoint here.
-    Controller nodes run the long-lived controller daemon here.
-    """
-    current_role = _current_runtime_role() or "managed"
-    if foreground:
-        if current_role == "managed":
-            console.print(f"serving homebase client on {host}:{port}")
-        else:
-            console.print("running homebase controller service")
-        try:
-            if current_role == "managed":
-                serve_client(host=host, port=port)
-            else:
-                _run_controller_service_forever()
-        except OSError as exc:
-            console.print(f"[red]service start failed:[/red] {exc}")
-            raise typer.Exit(code=1)
-        return
-    running = connect_server_running()
-    if running is not None:
-        console.print(f"[yellow]homebase connect server already running[/yellow] on {running.host}:{running.port} (pid {running.pid})")
-        return
+def _start_daemon_background(*, host: str, port: int, current_role: str) -> None:
+    """Start the local daemon in the background and print the result."""
     CONNECT_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
     log_handle = CONNECT_LOG_PATH.open("a", encoding="utf-8")
     env = os.environ.copy()
@@ -1493,6 +1465,39 @@ def daemon_start_command(
         console.print("running homebase controller service")
     console.print(f"background pid: {process.pid}")
     console.print(f"log: {CONNECT_LOG_PATH}")
+
+
+@daemon_app.command("start")
+def daemon_start_command(
+    host: str = typer.Option("0.0.0.0", "--host", help="Listen address for the managed connect endpoint."),
+    port: int = typer.Option(DEFAULT_CLIENT_PORT, "--port", help="Listen port for the managed connect endpoint."),
+    foreground: bool = typer.Option(False, "--foreground", hidden=True),
+) -> None:
+    """Start the local background runtime for this node.
+
+    Managed nodes expose the connect endpoint here.
+    Controller nodes run the long-lived controller daemon here.
+    """
+    current_role = _current_runtime_role() or "managed"
+    if foreground:
+        if current_role == "managed":
+            console.print(f"serving homebase client on {host}:{port}")
+        else:
+            console.print("running homebase controller service")
+        try:
+            if current_role == "managed":
+                serve_client(host=host, port=port)
+            else:
+                _run_controller_service_forever()
+        except OSError as exc:
+            console.print(f"[red]service start failed:[/red] {exc}")
+            raise typer.Exit(code=1)
+        return
+    running = connect_server_running()
+    if running is not None:
+        console.print(f"[yellow]homebase connect server already running[/yellow] on {running.host}:{running.port} (pid {running.pid})")
+        return
+    _start_daemon_background(host=host, port=port, current_role=current_role)
 
 
 @daemon_app.command("status")
@@ -1550,6 +1555,24 @@ def daemon_stop_command() -> None:
         console.print("daemon: stopped")
         return
     console.print(f"stopped daemon (pid {runtime.pid})")
+
+
+@daemon_app.command("restart")
+def daemon_restart_command(
+    host: str | None = typer.Option(None, "--host", help="Listen address for the restarted daemon. Defaults to the current daemon host."),
+    port: int | None = typer.Option(None, "--port", help="Listen port for the restarted daemon. Defaults to the current daemon port."),
+) -> None:
+    """Restart the local background runtime on this node."""
+    current_role = _current_runtime_role() or "managed"
+    runtime = connect_server_running()
+    selected_host = host or (runtime.host if runtime is not None else "0.0.0.0")
+    selected_port = port or (runtime.port if runtime is not None else DEFAULT_CLIENT_PORT)
+    if runtime is not None:
+        stop_connect_server()
+        console.print(f"stopped daemon (pid {runtime.pid})")
+    else:
+        console.print("daemon was not running; starting a new instance")
+    _start_daemon_background(host=selected_host, port=selected_port, current_role=current_role)
 
 
 def _node_exposed_services(node) -> tuple[str, ...]:
