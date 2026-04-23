@@ -36,10 +36,10 @@ On the control node:
 homebase init
 homebase connect scan
 homebase connect add
-homebase --group --add host-node
-homebase --group --add app-tier
-homebase --group --select host-node --add app-tier
-homebase --node --select host.app --add app-tier
+homebase group add host-node
+homebase group add app-tier
+homebase link add host-node app-tier
+homebase node assign host.app app-tier
 homebase state set host.app status active
 ```
 
@@ -84,28 +84,31 @@ What they do:
 
 ## Inventory And State Commands
 
-Use `homebase --select ...` when you want to inspect or change one local role, node, or group directly.
+Use `homebase status` when you want one overview of everything currently registered.
 
 ```bash
-homebase --role --description
-homebase --role --edit control
-homebase --group --add app-tier
-homebase --group --remove app-tier
-homebase --node --select host.app --description
-homebase --node --select host.app --edit host.api
-homebase --node --select host.app --add app-tier
-homebase --node --select host.app --remove app-tier
-homebase --group --select host-node --description
-homebase --group --select host-node --edit host-cluster
-homebase --group --select host-node --add app-tier
-homebase --group --select host-node --remove app-tier
+homebase status
 ```
 
-Use `homebase list` when you want to browse registered nodes and groups.
+Use object commands when you want to inspect or change one area directly.
 
 ```bash
-homebase list
-homebase list host.app
+homebase role show
+homebase role set control
+homebase node list
+homebase node show host.app
+homebase node rename host.app host.api
+homebase node set-role host.app managed
+homebase node assign host.app app-tier
+homebase node unassign host.app app-tier
+homebase group list
+homebase group show app-tier
+homebase group add app-tier
+homebase group rename app-tier app-services
+homebase group remove app-tier
+homebase link list
+homebase link add host-node app-tier
+homebase link remove host-node app-tier
 ```
 
 Use `homebase inventory` when you want to inspect or edit the ansible-style YAML.
