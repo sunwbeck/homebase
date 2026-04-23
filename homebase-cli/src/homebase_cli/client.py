@@ -11,6 +11,7 @@ import json
 import os
 from pathlib import Path
 import platform as platform_module
+import re
 import secrets
 import signal
 import socket
@@ -32,6 +33,20 @@ PACKAGE_UPGRADE_PATH = "/package/upgrade"
 CLIENT_STATE_PATH = Path.home() / ".config" / "homebase" / "client-state.json"
 CONNECT_RUNTIME_PATH = LOCAL_CLI_ROOT / "run" / "connect-server.json"
 CONNECT_LOG_PATH = LOCAL_CLI_ROOT / "logs" / "connect-server.log"
+KNOWN_PORT_PURPOSES = {
+    22: "ssh",
+    53: "dns",
+    80: "http",
+    111: "rpcbind",
+    139: "netbios",
+    443: "https",
+    445: "smb",
+    2049: "nfs",
+    3000: "grafana",
+    32400: "plex",
+    8428: "homebase",
+    9090: "prometheus",
+}
 
 
 @dataclass(frozen=True)
@@ -249,16 +264,32 @@ def detect_primary_address() -> str | None:
 
 
 def detect_open_ports() -> tuple[int, ...]:
-    """Return locally listening TCP ports when available."""
+    """Return externally reachable listening TCP ports when available."""
+    return tuple(port for port, _, _ in detect_exposed_endpoints())
+
+
+def describe_port(port: int, owner: str | None = None) -> str:
+    """Return one short human-friendly purpose label for a port."""
+    known = KNOWN_PORT_PURPOSES.get(port)
+    if known:
+        return known
+    normalized_owner = (owner or "").strip()
+    if normalized_owner.endswith(".service"):
+        normalized_owner = normalized_owner.removesuffix(".service")
+    return normalized_owner or str(port)
+
+
+def detect_exposed_endpoints() -> tuple[tuple[int, str, str | None], ...]:
+    """Return externally reachable listening endpoints as (port, purpose, owner)."""
     proc = subprocess.run(
-        ["ss", "-ltnH"],
+        ["ss", "-ltnpH"],
         check=False,
         capture_output=True,
         text=True,
     )
     if proc.returncode != 0:
         return ()
-    ports: set[int] = set()
+    endpoints: dict[int, tuple[int, str, str | None]] = {}
     for line in proc.stdout.splitlines():
         parts = line.split()
         if len(parts) < 4:
@@ -267,11 +298,27 @@ def detect_open_ports() -> tuple[int, ...]:
         host, _, port_text = local_address.rpartition(":")
         if not host:
             continue
+        normalized_host = host.strip().strip("[]").split("%", 1)[0]
+        if normalized_host in {"127.0.0.1", "::1", "localhost"} or normalized_host.startswith("127."):
+            continue
         try:
-            ports.add(int(port_text))
+            port = int(port_text)
         except ValueError:
             continue
-    return tuple(sorted(ports))
+        process_blob = " ".join(parts[5:]).strip()
+        owner_match = re.search(r'\(\("([^"]+)"', process_blob)
+        owner = owner_match.group(1).strip() if owner_match is not None else None
+        endpoints[port] = (port, describe_port(port, owner), owner)
+    return tuple(sorted(endpoints.values(), key=lambda item: item[0]))
+
+
+def detect_exposed_services() -> tuple[str, ...]:
+    """Return unique externally reachable service labels."""
+    labels: list[str] = []
+    for _, purpose, _ in detect_exposed_endpoints():
+        if purpose not in labels:
+            labels.append(purpose)
+    return tuple(labels)
 
 
 def detect_running_services() -> tuple[str, ...]:
@@ -319,7 +366,7 @@ def local_profile() -> ClientProfile:
         platform=discovery.platform,
         version=discovery.version,
         open_ports=detect_open_ports(),
-        services=detect_running_services(),
+        services=detect_exposed_services(),
     )
 
 

@@ -278,6 +278,7 @@ def test_status_shows_local_node(monkeypatch) -> None:
         assert "Node status" in status_result.stdout
         assert "control" in status_result.stdout
         assert "controller" in status_result.stdout
+        assert "ssh" in status_result.stdout or "homebase" in status_result.stdout or "Open Ports" in status_result.stdout
 
 
 def test_managed_status_shows_self_and_paired_controllers(monkeypatch) -> None:
@@ -354,7 +355,8 @@ def test_node_edit_name_updates_local_node_name(monkeypatch) -> None:
         Path("settings.toml").write_text('role = "controller"\nnode_name = "host.app"\n', encoding="utf-8")
         Path("nodes.toml").write_text('[[nodes]]\nname = "host.app"\nkind = "vm"\nruntime_role = "managed"\n', encoding="utf-8")
         app = load_app(monkeypatch, "settings.toml")
-        monkeypatch.setattr("homebase_cli.cli._pick_from_list", lambda label, options: "host.app (local)")
+        picks = iter(["host.app (local)", "name"])
+        monkeypatch.setattr("homebase_cli.cli._pick_from_list", lambda label, options: next(picks))
         result = runner.invoke(app, ["node", "edit"], env=env, input="host.api\n")
         assert result.exit_code == 0
         assert 'node_name = "host.api"' in Path("settings.toml").read_text(encoding="utf-8")
@@ -367,11 +369,44 @@ def test_node_edit_blank_input_keeps_current_name(monkeypatch) -> None:
         Path("settings.toml").write_text('role = "controller"\nnode_name = "app"\n', encoding="utf-8")
         Path("nodes.toml").write_text('[[nodes]]\nname = "app"\nkind = "vm"\nruntime_role = "managed"\n', encoding="utf-8")
         app = load_app(monkeypatch, "settings.toml")
-        monkeypatch.setattr("homebase_cli.cli._pick_from_list", lambda label, options: "app (local)")
+        picks = iter(["app (local)", "name"])
+        monkeypatch.setattr("homebase_cli.cli._pick_from_list", lambda label, options: next(picks))
         result = runner.invoke(app, ["node", "edit"], env=env, input="\n")
         assert result.exit_code == 0
         assert "Renamed node:" in result.stdout
         assert "app -> app" in result.stdout
+
+
+def test_node_edit_description_updates_description(monkeypatch) -> None:
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        env = {"HOMEBASE_SETTINGS_PATH": "settings.toml", "HOMEBASE_REGISTRY_PATH": "nodes.toml"}
+        Path("settings.toml").write_text('role = "controller"\nnode_name = "control"\n', encoding="utf-8")
+        Path("nodes.toml").write_text('[[nodes]]\nname = "app"\nkind = "vm"\nruntime_role = "managed"\n', encoding="utf-8")
+        app = load_app(monkeypatch, "settings.toml")
+        picks = iter(["app", "description"])
+        monkeypatch.setattr("homebase_cli.cli._pick_from_list", lambda label, options: next(picks))
+        result = runner.invoke(app, ["node", "edit"], env=env, input="application vm\n")
+        assert result.exit_code == 0
+        assert "Updated node description:" in result.stdout
+
+
+def test_node_list_shows_address_and_description(monkeypatch) -> None:
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        env = {"HOMEBASE_SETTINGS_PATH": "settings.toml", "HOMEBASE_REGISTRY_PATH": "nodes.toml", "COLUMNS": "240"}
+        Path("settings.toml").write_text('role = "controller"\nnode_name = "control"\n', encoding="utf-8")
+        Path("nodes.toml").write_text(
+            '[[nodes]]\nname = "app"\nkind = "vm"\nruntime_role = "managed"\naddress = "192.168.0.20"\ndescription = "application vm"\n',
+            encoding="utf-8",
+        )
+        app = load_app(monkeypatch, "settings.toml")
+        result = runner.invoke(app, ["node", "list"], env=env)
+        assert result.exit_code == 0
+        assert "Address" in result.stdout
+        assert "Description" in result.stdout
+        assert "192.168.0.20" in result.stdout
+        assert "application vm" in result.stdout
 
 
 def test_group_edit_without_args_prompts_for_group_and_field(monkeypatch) -> None:

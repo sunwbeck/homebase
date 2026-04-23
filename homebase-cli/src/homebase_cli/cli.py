@@ -22,7 +22,9 @@ from homebase_cli.client import (
     ConnectRuntime,
     CONNECT_LOG_PATH,
     DEFAULT_CLIENT_PORT,
+    describe_port,
     detect_primary_address,
+    detect_running_services,
     connect_server_running,
     clear_connect_runtime,
     discovery_payload,
@@ -178,6 +180,13 @@ def _node_service_state(node_name: str) -> str:
     return ""
 
 
+def _format_port_summary(ports: Sequence[int]) -> str:
+    """Render ports as short 'port purpose' entries."""
+    if not ports:
+        return ""
+    return ", ".join(f"{port} {describe_port(port)}" for port in ports)
+
+
 def _inventory_nodes():
     """Return registered nodes, keeping the local node visible."""
     nodes = list(load_nodes())
@@ -291,6 +300,7 @@ def _show_node_details(node_name: str) -> None:
     platform_value = node.platform or (local_profile_data.platform if local_profile_data is not None else None) or ""
     open_ports = node.open_ports or (local_profile_data.open_ports if local_profile_data is not None else ())
     services = node.services or (local_profile_data.services if local_profile_data is not None else ())
+    all_services = tuple(detect_running_services()) if local_profile_data is not None else services
     address_value = node.address or (detect_primary_address() if local_profile_data is not None else None) or ""
     console.print(f"[bold]Node: {_node_label(node.name)}[/bold]")
 
@@ -312,6 +322,8 @@ def _show_node_details(node_name: str) -> None:
     runtime.add_row("hostname", node.runtime_hostname or (local_profile_data.hostname if local_profile_data is not None else "") or "")
     runtime.add_row("os", platform_value)
     runtime.add_row("service", _node_service_state(node.name))
+    runtime.add_row("external services", ", ".join(services))
+    runtime.add_row("all services", ", ".join(all_services))
     runtime.add_row("groups", ", ".join(node.role_groups) if node.role_groups else "")
     runtime.add_row("states", _state_summary(node.states))
     console.print("[bold]Runtime[/bold]")
@@ -322,8 +334,7 @@ def _show_node_details(node_name: str) -> None:
     network.add_column("Value")
     network.add_row("address", address_value)
     network.add_row("connect port", str(node.client_port) if node.client_port is not None else "")
-    network.add_row("open ports", ", ".join(str(port) for port in open_ports))
-    network.add_row("services", ", ".join(services))
+    network.add_row("open ports", _format_port_summary(open_ports))
     console.print("[bold]Network[/bold]")
     console.print(network)
 
@@ -384,7 +395,7 @@ def _print_registered_overview() -> None:
             node.runtime_hostname or (local_profile_data.hostname if local_profile_data is not None else ""),
             node.platform or (local_profile_data.platform if local_profile_data is not None else ""),
             _node_service_state(node.name),
-            ", ".join(str(port) for port in (node.open_ports or (local_profile_data.open_ports if local_profile_data is not None else ()))),
+            _format_port_summary(node.open_ports or (local_profile_data.open_ports if local_profile_data is not None else ())),
             ", ".join(node.services or (local_profile_data.services if local_profile_data is not None else ())),
             ", ".join(node.role_groups) if node.role_groups else "",
             _state_summary(node.states),
@@ -415,7 +426,7 @@ def _print_managed_overview() -> None:
         profile.hostname,
         profile.platform,
         "running" if runtime is not None else "stopped",
-        ", ".join(str(port) for port in profile.open_ports),
+        _format_port_summary(profile.open_ports),
         ", ".join(profile.services),
         "self",
     )
@@ -811,9 +822,7 @@ def node_list_command(resource: str | None = typer.Argument(None, help="Optional
     table.add_column("Node")
     table.add_column("Role")
     table.add_column("Kind")
-    table.add_column("Parent")
     table.add_column("Address")
-    table.add_column("Hostname")
     table.add_column("Groups")
     table.add_column("Description")
     for item in resources:
@@ -821,9 +830,7 @@ def node_list_command(resource: str | None = typer.Argument(None, help="Optional
             _node_label(item.name),
             item.runtime_role,
             item.kind,
-            item.parent or "",
             item.address or "",
-            item.runtime_hostname or "",
             ", ".join(item.role_groups) if item.role_groups else "",
             item.description,
         )
@@ -1182,30 +1189,45 @@ def role_edit_command(
 @node_app.command("edit")
 def node_edit_command(
     target: str | None = typer.Argument(None, help="Optional current node name."),
-    new_name: str | None = typer.Argument(None, help="Optional new node name."),
+    field: str | None = typer.Argument(None, help="Optional field to edit: name or description."),
+    value: str | None = typer.Argument(None, help="Optional new value."),
 ) -> None:
     """Edit one registered node.
 
-    This command only renames nodes.
-    Without arguments, it lists registered nodes and lets you choose the node
-    first, then enter the new name.
+    This command edits node metadata only.
+    Without arguments, it lists registered nodes and lets you choose the node,
+    field, and new value interactively.
     """
     _require_role("controller")
     selected_target = target or _choose_registered_node()
+    selected_field = (field or _pick_from_list("Node field", ("name", "description"))).strip().lower()
     node = find_node(selected_target)
     if node is None:
         raise typer.BadParameter(f"unknown node: {selected_target}")
-    selected_value = (new_name.strip() if new_name is not None else "") or typer.prompt(
-        "New node name",
-        default=node.name,
+    default_value = node.name if selected_field == "name" else node.description
+    selected_value = (value.strip() if value is not None else "") or typer.prompt(
+        "New value",
+        default=default_value,
     ).strip()
-    try:
-        renamed = rename_node(node.name, selected_value)
-        if _current_node_name() == node.name:
-            set_node_name(renamed.name)
-    except ValueError as exc:
-        raise typer.BadParameter(str(exc)) from exc
-    console.print(f"[green]Renamed node:[/green] {node.name} -> {renamed.name}")
+    if selected_field == "name":
+        try:
+            renamed = rename_node(node.name, selected_value)
+            if _current_node_name() == node.name:
+                set_node_name(renamed.name)
+        except ValueError as exc:
+            raise typer.BadParameter(str(exc)) from exc
+        console.print(f"[green]Renamed node:[/green] {node.name} -> {renamed.name}")
+        return
+    if selected_field == "description":
+        from homebase_cli.registry import set_node_description
+
+        try:
+            updated = set_node_description(node.name, selected_value)
+        except ValueError as exc:
+            raise typer.BadParameter(str(exc)) from exc
+        console.print(f"[green]Updated node description:[/green] {updated.name}")
+        return
+    raise typer.BadParameter("node edit field must be one of: name, description")
 
 
 @node_app.command("remove")

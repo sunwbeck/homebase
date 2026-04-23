@@ -396,6 +396,42 @@ def set_node_runtime_role(name: str, runtime_role: str, path: Path | None = None
     return updated
 
 
+def set_node_description(name: str, description: str, path: Path | None = None) -> Node:
+    """Set one node description."""
+    normalized_name = name.strip()
+    nodes = load_nodes(path)
+    current = next((node for node in nodes if node.name == normalized_name), None)
+    if current is None:
+        raise ValueError(f"unknown node: {normalized_name}")
+    updated_nodes: list[Node] = []
+    updated: Node | None = None
+    for node in nodes:
+        if node.name != normalized_name:
+            updated_nodes.append(node)
+            continue
+        updated = Node(
+            name=node.name,
+            parent=node.parent,
+            kind=node.kind,
+            runtime_role=node.runtime_role,
+            address=node.address,
+            ssh_user=node.ssh_user,
+            description=description.strip(),
+            runtime_hostname=node.runtime_hostname,
+            node_id=node.node_id,
+            platform=node.platform,
+            client_port=node.client_port,
+            open_ports=node.open_ports,
+            services=node.services,
+            role_groups=node.role_groups,
+            states=node.states,
+        )
+        updated_nodes.append(updated)
+    save_nodes(tuple(updated_nodes), path)
+    assert updated is not None
+    return updated
+
+
 def ensure_local_node(
     name: str,
     runtime_role: str,
