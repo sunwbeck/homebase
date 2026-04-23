@@ -267,6 +267,36 @@ def describe_port(port: int, owner: str | None = None) -> str:
     return normalized_owner or str(port)
 
 
+def _interface_addresses() -> dict[str, str]:
+    """Return one address-to-interface map for current addresses."""
+    for command in (["ip", "-br", "addr"], ["/usr/sbin/ip", "-br", "addr"]):
+        try:
+            proc = subprocess.run(
+                command,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+        except OSError:
+            continue
+        if proc.returncode != 0:
+            continue
+        mapping: dict[str, str] = {}
+        for line in proc.stdout.splitlines():
+            parts = line.split()
+            if len(parts) < 3:
+                continue
+            iface = parts[0].strip()
+            for token in parts[2:]:
+                candidate, _, _ = token.partition("/")
+                normalized = candidate.strip().strip("[]").split("%", 1)[0]
+                if normalized:
+                    mapping[normalized] = iface
+        if mapping:
+            return mapping
+    return {}
+
+
 def detect_exposed_endpoints() -> tuple[tuple[int, str, str | None], ...]:
     """Return externally reachable listening endpoints as (port, purpose, owner)."""
     proc = subprocess.run(
@@ -277,6 +307,7 @@ def detect_exposed_endpoints() -> tuple[tuple[int, str, str | None], ...]:
     )
     if proc.returncode != 0:
         return ()
+    interface_by_address = _interface_addresses()
     endpoints: dict[int, tuple[int, str, str | None]] = {}
     for line in proc.stdout.splitlines():
         parts = line.split()
@@ -302,7 +333,8 @@ def detect_exposed_endpoints() -> tuple[tuple[int, str, str | None], ...]:
                 break
         if owner is None and process_blob:
             owner = process_blob.strip() or None
-        endpoints[port] = (port, describe_port(port, owner), owner)
+        fallback_owner = owner or interface_by_address.get(normalized_host)
+        endpoints[port] = (port, describe_port(port, fallback_owner), owner)
     return tuple(sorted(endpoints.values(), key=lambda item: item[0]))
 
 

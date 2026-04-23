@@ -1,9 +1,11 @@
 from pathlib import Path
+from types import SimpleNamespace
 
 from homebase_cli.client import (
     ClientState,
     PackageInstallRequest,
     PairRequest,
+    detect_exposed_endpoints,
     load_client_state,
     pair_controller,
     parse_package_install_request,
@@ -70,3 +72,23 @@ def test_state_path_uses_environment_override(tmp_path: Path, monkeypatch) -> No
     target = tmp_path / "override-state.json"
     monkeypatch.setenv("HOMEBASE_CLIENT_STATE_PATH", str(target))
     assert state_path() == target
+
+
+def test_detect_exposed_endpoints_falls_back_to_interface_name_when_owner_hidden(monkeypatch) -> None:
+    outputs = iter(
+        [
+            SimpleNamespace(
+                returncode=0,
+                stdout="LISTEN 0 4096 100.93.33.36:38339 0.0.0.0:*\n",
+                stderr="",
+            ),
+            SimpleNamespace(
+                returncode=0,
+                stdout="tailscale0 UP 100.93.33.36/32 fd7a:115c:a1e0::b237:2124/128\n",
+                stderr="",
+            ),
+        ]
+    )
+    monkeypatch.setattr("homebase_cli.client.subprocess.run", lambda *args, **kwargs: next(outputs))
+    endpoints = detect_exposed_endpoints()
+    assert endpoints == ((38339, "tailscale0", None),)
