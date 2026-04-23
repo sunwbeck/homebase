@@ -8,7 +8,7 @@ What it does:
 
 - discovers and registers managed nodes
 - shows node information and basic status
-- runs a small connect service on each managed node
+- runs a small background service on each node
 - installs and updates `homebase` from GitHub refs
 - lets the controller node request installs and updates on other paired nodes
 
@@ -48,15 +48,15 @@ On a managed node:
 ```bash
 homebase init
 homebase connect code --refresh
-homebase connect serve
+homebase service start
 ```
 
 Pairing flow:
 
-1. start `homebase connect serve` on the target node
+1. start `homebase service start` on the target node
 2. read the 8-digit code from `homebase connect code --refresh`
-3. run `homebase node scan` on the controller node
-4. run `homebase node add` on the controller node and enter the code
+3. run `homebase connect scan` on the controller node
+4. run `homebase connect add` on the controller node and enter the code
 
 `homebase init` registers the current machine with a local node name as well as a node type.
 
@@ -84,7 +84,7 @@ What they do:
 
 ## Inventory And State Commands
 
-Use `homebase status` when you want one overview of everything currently registered.
+Use `homebase status` when you want one live overview of all registered nodes.
 
 ```bash
 homebase status
@@ -93,11 +93,6 @@ homebase status
 Use object commands when you want to inspect or change one area directly.
 
 ```bash
-homebase role show
-homebase role list
-homebase role show host.app
-homebase role edit controller
-homebase role edit host.app managed
 homebase node list
 homebase node show host.app
 homebase node edit host.app name host.api
@@ -123,7 +118,7 @@ homebase inventory show
 homebase inventory edit
 ```
 
-`homebase inventory` and `homebase inventory show` refresh the ansible YAML and print the YAML contents. `homebase inventory edit` opens that YAML in your editor.
+`homebase inventory` shows inventory help. `homebase inventory show` refreshes the ansible YAML and prints it. `homebase inventory edit` opens that YAML in your editor.
 
 `homebase state` stores simple key/value labels on registered nodes.
 

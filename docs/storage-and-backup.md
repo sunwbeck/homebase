@@ -20,12 +20,12 @@ This design makes `host.storage` the main data platform for `homebase`.
 
 ## Repository Placement
 
-The `homebase` working directory is expected to move onto NAS-backed storage provided by `host.storage`.
+The `homebase` repository stays in git and is worked from a normal checked-out directory.
 
 Operational intent:
 
-- the NAS copy becomes the canonical repository location
-- work outputs and progress artifacts should be stored on NAS alongside the repository or in an adjacent managed directory
+- NAS-backed storage should be used for backups, snapshots, and large runtime artifacts when needed
+- repository history, code, and docs continue to live in git
 - the storage location should be covered by snapshots and the backup workflow
 
 ## Backup Plan

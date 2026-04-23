@@ -1,8 +1,10 @@
 # homebase NAS Migration
 
+This document is now historical. `homebase` no longer assumes a NAS-backed repository root or a NAS-backed docs root.
+
 ## Goal
 
-Move the canonical `homebase` working directory from the local home directory onto NAS-backed storage without breaking existing local tooling.
+It describes an older plan to move the working directory onto NAS-backed storage without breaking local tooling.
 
 This runbook assumes the NAS share is already exported and mounted on the client that will perform the migration.
 

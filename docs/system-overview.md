@@ -63,7 +63,7 @@ Current observed build stage:
 - the `host` node is mostly built
 - the three planned VMs have been installed
 - basic setup on `storage`, `app`, and `llm-agents` is nearly complete
-- the next infrastructure workflow step is to move the `homebase` working directory onto NAS-backed storage
+- the next infrastructure workflow step is to keep the GitHub checkout and repo-local docs aligned with the running system
 
 ## High-Level Topology
 
@@ -233,9 +233,9 @@ Observability service placement:
 
 The intended working model is:
 
-- move the `homebase` directory onto NAS-backed storage exposed by `host.storage`
-- treat the NAS copy as the canonical operator workspace
-- keep progress artifacts, generated outputs, and related operational traces on NAS so work can be inspected from the shared storage location
+- keep `/home/sun/homebase` as the active operator checkout unless a different repo checkout is explicitly chosen
+- treat the checked-out repository and its `docs/` directory as the canonical planning workspace
+- keep generated runtime state outside the repository unless it is intended to be versioned
 
 Planned CLI behavior:
 
@@ -268,4 +268,4 @@ These items still need confirmation or refinement:
 - whether `control` should be Wi-Fi or Ethernet
 - exact placement of Nextcloud
 - final backup workflow details, especially capacity fit against the `3 TB` backup disk
-- the final NAS mount path used for the canonical `homebase` directory
+- any future shared storage path used for runtime artifacts or backups

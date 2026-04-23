@@ -2,47 +2,48 @@
 
 ## Snapshot
 
-This document captures the currently implemented state of `homebase`.
+`homebase` now uses the GitHub repository as the working source and keeps its planning docs inside the repo under `docs/`.
 
-Current build status:
+Current implementation direction:
 
-- the `host` node is mostly built
-- three VMs have been installed on the host
-- baseline setup on each VM is nearly complete
+- one CLI surface for both controller and managed nodes
+- `connect` for pairing and discovery
+- `service` for background runtime
+- GitHub-backed install and update flow through `homebase package`
+- repo-local docs are updated with the code, rather than keeping a separate NAS docs root
 
-Current VM names:
+Current runtime naming:
 
-- `storage`
-- `app`
-- `llm-agents`
+- local runtime roles: `controller`, `managed`
+- top-level nodes still center on `control`, `workstation`, and `host`
+- host children currently remain `host.storage`, `host.app`, and `host.llm-agents`
 
 ## Immediate Direction
 
-The next operational step is to move the `homebase` working directory onto NAS-backed storage.
+The near-term work is CLI cleanup and operator UX hardening, not repository relocation.
 
-Current intent:
+Current priority:
 
-- move the `homebase` directory itself from the local home directory onto NAS storage
-- treat the NAS-backed copy as the canonical working location
-- perform ongoing work there so outputs, logs, and progress artifacts can be observed in one shared place
+- make `status`, `node`, `group`, and `link` outputs clearly useful
+- keep one command grammar across controller and managed nodes
+- move background responsibilities under `service`
+- prepare the controller runtime for upcoming reverse proxy work
+- keep install and rollout behavior GitHub-ref driven
 
 ## Working Directory Policy
 
-The repository and related work artifacts should follow these rules:
+The checked-out GitHub repository is the active working copy.
 
-- the canonical `homebase` path should live on NAS-backed storage
-- long-lived outputs, generated artifacts, and progress traces should be written there rather than onto local transient disks
-- local nodes may expose the NAS location through a stable mount point or symlink for operator convenience
-- automation should fail clearly if the NAS mount is unavailable rather than silently writing state to an unintended local path
+Rules:
 
-Suggested practical pattern:
-
-- keep the real directory on the NAS share
-- preserve `/home/sun/homebase` as a symlink only if local tools still expect that path
+- keep `/home/sun/homebase` as the local operator checkout unless a different repo checkout is explicitly chosen
+- treat `docs/` inside that repo as the planning and architecture reference
+- do not depend on `/mnt/files/homebase/docs`
+- generated local runtime state may live under the user home directory, but repository code and docs stay in git
 
 ## Near-Term Open Items
 
-- choose the final NAS export path and client mount path
-- define which nodes need read-write versus read-only access
-- decide whether `homebase` automation outputs should live beside the repo or under a separate NAS subdirectory
-- include the `homebase` NAS dataset or share in the snapshot and backup policy
+- tighten the purpose of `list`, `show`, and `status` across CLI object commands
+- remove hidden legacy inventory mutation paths still left behind from earlier iterations
+- define the `proxy` command group for reverse proxy and service exposure work
+- add Git tags or releases so `homebase package versions` can show versioned targets instead of only the default branch

@@ -35,7 +35,7 @@ from homebase_cli.client import (
 )
 from homebase_cli.docs_reader import docs_root, get_doc, list_docs
 from homebase_cli.inventory import ansible_inventory_path, ansible_ping, open_ansible_inventory, write_ansible_inventory
-from homebase_cli.output import print_docs_table, print_node_tree, print_resource_table, print_scan_table
+from homebase_cli.output import print_docs_table, print_node_tree, print_scan_table
 from homebase_cli.packaging import (
     DEFAULT_REPO_URL,
     GitHubVersion,
@@ -116,6 +116,63 @@ def _show_group_help(ctx: typer.Context) -> None:
     raise typer.Exit(code=0)
 
 
+def _state_summary(states: Sequence[tuple[str, str]]) -> str:
+    """Render one compact saved-state summary."""
+    if not states:
+        return ""
+    return ", ".join(f"{key}={value}" for key, value in states)
+
+
+def _group_parents(group_name: str) -> list[str]:
+    """Return the direct parent groups for one group."""
+    return sorted(group.name for group in load_role_groups() if group_name in group.members)
+
+
+def _assigned_group_nodes(group_name: str) -> list[str]:
+    """Return the node names assigned to one group."""
+    return sorted(node.name for node in load_nodes() if group_name in node.role_groups)
+
+
+def _node_label(node_name: str) -> str:
+    """Render one node label, marking the current node."""
+    current_name = _current_node_name()
+    if current_name and node_name == current_name:
+        return f"{node_name} (local)"
+    return node_name
+
+
+def _node_service_state(node_name: str) -> str:
+    """Return the local background-service state when known."""
+    current_name = _current_node_name()
+    if current_name and current_name == node_name:
+        return "running" if connect_server_running() is not None else "stopped"
+    return ""
+
+
+def _inventory_nodes():
+    """Return registered nodes, keeping the local node visible."""
+    nodes = list(load_nodes())
+    current_name = _current_node_name()
+    current_role = _current_runtime_role()
+    if current_name and current_role and not any(node.name == current_name for node in nodes):
+        try:
+            profile = local_profile()
+            nodes.append(
+                ensure_local_node(
+                    current_name,
+                    current_role,
+                    runtime_hostname=profile.hostname,
+                    address=detect_primary_address() or None,
+                    platform=profile.platform,
+                    open_ports=profile.open_ports,
+                    services=profile.services,
+                )
+            )
+        except Exception:
+            nodes.append(ensure_local_node(current_name, current_role, runtime_hostname=socket.gethostname()))
+    return tuple(sorted(nodes, key=lambda item: item.name))
+
+
 def _match_registered_nodes(scan_address: str, scan_node_id: str | None) -> str:
     """Return registered node names matching a discovered address or node id."""
     matches: list[str] = []
@@ -179,32 +236,6 @@ def _choose_runtime_role() -> str:
     return _pick_from_list("Node type", list(runtime_roles()))
 
 
-def _group_index() -> dict[str, RoleGroup]:
-    return {group.name: group for group in load_role_groups()}
-
-
-def _group_roots() -> list[str]:
-    groups = load_role_groups()
-    child_names = {member for group in groups for member in group.members}
-    roots = [group.name for group in groups if group.name not in child_names]
-    return sorted(roots)
-
-
-def _resolve_local_node_name() -> str:
-    node_name = _current_node_name()
-    if not node_name:
-        raise typer.BadParameter("local node name is not set; run `homebase init` first")
-    return node_name
-
-
-def _resolve_inventory_node_target(resource: str | None) -> str:
-    return resource.strip() if resource is not None else _resolve_local_node_name()
-
-
-def _count_actions(*values: object) -> int:
-    return sum(1 for value in values if value not in (None, False, ""))
-
-
 def _find_group(name: str) -> RoleGroup | None:
     normalized = name.strip()
     for group in load_role_groups():
@@ -223,91 +254,108 @@ def _show_node_details(node_name: str) -> None:
             local_profile_data = local_profile()
         except Exception:
             local_profile_data = None
-    platform_value = node.platform or (local_profile_data.platform if local_profile_data is not None else None)
+    platform_value = node.platform or (local_profile_data.platform if local_profile_data is not None else None) or ""
     open_ports = node.open_ports or (local_profile_data.open_ports if local_profile_data is not None else ())
     services = node.services or (local_profile_data.services if local_profile_data is not None else ())
-    address_value = node.address or (detect_primary_address() if local_profile_data is not None else None)
-    console.print(f"[bold]Node: {node.name}[/bold]")
-    console.print(f"role: {node.runtime_role}")
-    console.print(f"groups: {', '.join(node.role_groups) if node.role_groups else 'none'}")
-    if node.parent:
-        console.print(f"parent: {node.parent}")
-    console.print(f"class: {node.kind}")
-    if address_value:
-        console.print(f"address: {address_value}")
-    if node.runtime_hostname:
-        console.print(f"hostname: {node.runtime_hostname}")
-    if platform_value:
-        console.print(f"os: {platform_value}")
-    if open_ports:
-        console.print(f"open ports: {', '.join(str(port) for port in open_ports)}")
-    if services:
-        console.print(f"services: {', '.join(services)}")
+    address_value = node.address or (detect_primary_address() if local_profile_data is not None else None) or ""
+    console.print(f"[bold]Node: {_node_label(node.name)}[/bold]")
+
+    identity = Table(show_header=False, box=None)
+    identity.add_column("Field", style="bold")
+    identity.add_column("Value")
+    identity.add_row("role", node.runtime_role)
+    identity.add_row("kind", node.kind)
+    identity.add_row("parent", node.parent or "")
+    identity.add_row("description", node.description or "")
+    identity.add_row("node id", node.node_id or "")
+    identity.add_row("ssh user", node.ssh_user or "")
+    console.print("[bold]Identity[/bold]")
+    console.print(identity)
+
+    runtime = Table(show_header=False, box=None)
+    runtime.add_column("Field", style="bold")
+    runtime.add_column("Value")
+    runtime.add_row("hostname", node.runtime_hostname or (local_profile_data.hostname if local_profile_data is not None else "") or "")
+    runtime.add_row("os", platform_value)
+    runtime.add_row("service", _node_service_state(node.name))
+    runtime.add_row("groups", ", ".join(node.role_groups) if node.role_groups else "")
+    runtime.add_row("states", _state_summary(node.states))
+    console.print("[bold]Runtime[/bold]")
+    console.print(runtime)
+
+    network = Table(show_header=False, box=None)
+    network.add_column("Field", style="bold")
+    network.add_column("Value")
+    network.add_row("address", address_value)
+    network.add_row("connect port", str(node.client_port) if node.client_port is not None else "")
+    network.add_row("open ports", ", ".join(str(port) for port in open_ports))
+    network.add_row("services", ", ".join(services))
+    console.print("[bold]Network[/bold]")
+    console.print(network)
+
+    children = child_nodes(node.name)
+    relations = Table(show_header=False, box=None)
+    relations.add_column("Field", style="bold")
+    relations.add_column("Value")
+    relations.add_row("children", ", ".join(child.name for child in children))
+    console.print("[bold]Relations[/bold]")
+    console.print(relations)
 
 
 def _show_group_details(group_name: str) -> None:
     group = _find_group(group_name)
     if group is None:
         raise typer.BadParameter(f"unknown group: {group_name}")
-    assigned_nodes = [node.name for node in load_nodes() if group.name in node.role_groups]
+    assigned_nodes = _assigned_group_nodes(group.name)
     console.print(f"[bold]Group: {group.name}[/bold]")
-    console.print(f"members: {', '.join(group.members) if group.members else 'none'}")
-    console.print(f"assigned nodes: {', '.join(assigned_nodes) if assigned_nodes else 'none'}")
-    console.print(f"description: {group.description or 'none'}")
+    table = Table(show_header=False, box=None)
+    table.add_column("Field", style="bold")
+    table.add_column("Value")
+    table.add_row("description", group.description or "")
+    table.add_row("parents", ", ".join(_group_parents(group.name)))
+    table.add_row("children", ", ".join(group.members))
+    table.add_row("assigned nodes", ", ".join(assigned_nodes))
+    console.print(table)
 
 
 def _print_registered_overview() -> None:
-    nodes = load_nodes()
-    console.print("[bold]Registered nodes[/bold]")
+    nodes = _inventory_nodes()
+    console.print("[bold]Node status[/bold]")
     table = Table(show_header=True, header_style="bold")
     table.add_column("Node")
     table.add_column("Role")
     table.add_column("Address")
     table.add_column("Hostname")
     table.add_column("OS")
+    table.add_column("Service")
     table.add_column("Open Ports")
     table.add_column("Services")
     table.add_column("Groups")
+    table.add_column("State")
     current_name = _current_node_name()
     if not nodes:
-        if current_name and _current_runtime_role():
+        console.print("registered nodes: none")
+        return
+    for node in nodes:
+        local_profile_data = None
+        if current_name and node.name == current_name:
             try:
-                profile = local_profile()
-                table.add_row(
-                    f"{current_name} (local)",
-                    _current_runtime_role() or "",
-                    "",
-                    profile.hostname,
-                    profile.platform,
-                    ", ".join(str(port) for port in profile.open_ports),
-                    ", ".join(profile.services),
-                    "",
-                )
+                local_profile_data = local_profile()
             except Exception:
-                table.add_row(f"{current_name} (local)", _current_runtime_role() or "", "", socket.gethostname(), "", "", "", "")
-            console.print(table)
-        else:
-            console.print("registered nodes: none")
-    else:
-        for node in nodes:
-            label = f"{node.name} (local)" if current_name and node.name == current_name else node.name
-            local_profile_data = None
-            if current_name and node.name == current_name:
-                try:
-                    local_profile_data = local_profile()
-                except Exception:
-                    local_profile_data = None
-            table.add_row(
-                label,
-                node.runtime_role,
-                node.address or (detect_primary_address() if local_profile_data is not None else ""),
-                node.runtime_hostname or (local_profile_data.hostname if local_profile_data is not None else ""),
-                node.platform or (local_profile_data.platform if local_profile_data is not None else ""),
-                ", ".join(str(port) for port in (node.open_ports or (local_profile_data.open_ports if local_profile_data is not None else ()))),
-                ", ".join(node.services or (local_profile_data.services if local_profile_data is not None else ())),
-                ", ".join(node.role_groups) if node.role_groups else "",
-            )
-        console.print(table)
+                local_profile_data = None
+        table.add_row(
+            _node_label(node.name),
+            node.runtime_role,
+            node.address or (detect_primary_address() if local_profile_data is not None else ""),
+            node.runtime_hostname or (local_profile_data.hostname if local_profile_data is not None else ""),
+            node.platform or (local_profile_data.platform if local_profile_data is not None else ""),
+            _node_service_state(node.name),
+            ", ".join(str(port) for port in (node.open_ports or (local_profile_data.open_ports if local_profile_data is not None else ()))),
+            ", ".join(node.services or (local_profile_data.services if local_profile_data is not None else ())),
+            ", ".join(node.role_groups) if node.role_groups else "",
+            _state_summary(node.states),
+        )
+    console.print(table)
 
 
 def _print_local_role() -> None:
@@ -449,7 +497,7 @@ def _choose_kind() -> str:
 def _choose_discovered_node() -> DiscoveredNode:
     pending = list(unregistered_discovered_nodes())
     if not pending:
-        raise typer.BadParameter("no unregistered discovered nodes found; run `homebase node scan` first")
+        raise typer.BadParameter("no unregistered discovered nodes found; run `homebase connect scan` first")
     labels = [_format_discovered_label(item) for item in pending]
     selected_label = _pick_from_list("Discovered nodes", labels)
     return pending[labels.index(selected_label)]
@@ -590,72 +638,56 @@ def connect_status_command() -> None:
 
 @app.command("status")
 def status_command() -> None:
-    """Show the current registered nodes, groups, and basic state."""
+    """Show the current live status of registered nodes."""
     _require_role("controller")
     _print_registered_overview()
 
 
 @node_app.command("list")
-def node_list_command(resource: str | None = typer.Argument(None, help="Optional resource path such as host.")) -> None:
-    """List all registered nodes, or child nodes under one parent."""
+def node_list_command(resource: str | None = typer.Argument(None, help="Optional parent node name.")) -> None:
+    """List registered nodes for comparison."""
     _require_role("controller")
     if resource is None:
-        resources = load_nodes()
+        resources = _inventory_nodes()
     else:
         try:
             resources = child_resources(resource)
         except KeyError as exc:
             raise typer.BadParameter(str(exc)) from exc
-
-    rows = []
-    current_name = _current_node_name()
-    for item in resources:
-        label = f"{item.name} (local)" if current_name and item.name == current_name else item.name
-        rows.append((label, item.kind, item.address or ""))
-    if not rows:
+    if not resources:
         if resource is None:
             console.print("[yellow]No registered nodes.[/yellow]")
         else:
             console.print(f"[yellow]No children under {resource}.[/yellow]")
         return
-    print_resource_table(rows)
+    table = Table(show_header=True, header_style="bold")
+    table.add_column("Node")
+    table.add_column("Role")
+    table.add_column("Kind")
+    table.add_column("Parent")
+    table.add_column("Address")
+    table.add_column("Hostname")
+    table.add_column("Groups")
+    table.add_column("Description")
+    for item in resources:
+        table.add_row(
+            _node_label(item.name),
+            item.runtime_role,
+            item.kind,
+            item.parent or "",
+            item.address or "",
+            item.runtime_hostname or "",
+            ", ".join(item.role_groups) if item.role_groups else "",
+            item.description,
+        )
+    console.print(table)
 
 
 @node_app.command("show")
 def node_show_command(resource: str = typer.Argument(..., help="Canonical node name.")) -> None:
     """Show detailed information for one registered node."""
     _require_role("controller")
-    item = find_resource(resource)
-    if item is None:
-        raise typer.BadParameter(f"unknown resource: {resource}")
-
-    console.print(f"[bold]{item.name}[/bold]")
-    console.print(f"kind: {item.kind}")
-    if item.parent:
-        console.print(f"parent: {item.parent}")
-    if item.address:
-        console.print(f"address: {item.address}")
-    if item.runtime_hostname:
-        console.print(f"runtime hostname: {item.runtime_hostname}")
-    if item.node_id:
-        console.print(f"node id: {item.node_id}")
-    if item.platform:
-        console.print(f"platform: {item.platform}")
-    if item.client_port is not None:
-        console.print(f"client port: {item.client_port}")
-    if item.open_ports:
-        console.print(f"open ports: {', '.join(str(port) for port in item.open_ports)}")
-    if item.services:
-        console.print(f"services: {', '.join(item.services)}")
-    if item.ssh_user:
-        console.print(f"ssh user: {item.ssh_user}")
-    if item.description:
-        console.print(f"description: {item.description}")
-    children = child_nodes(item.name)
-    if children:
-        console.print("children:")
-        for child in children:
-            console.print(f"- {child.name}")
+    _show_node_details(resource)
 
 
 @ansible_app.command("inventory")
@@ -880,69 +912,6 @@ def init_command(
     console.print(f"[green]Registered local node name:[/green] {local_node.name}")
 
 
-@app.command("list", hidden=True)
-def inventory_list_command(target: str | None = typer.Argument(None, help="Optional node or group name.")) -> None:
-    """List registered nodes and groups, or show one node or group."""
-    _require_role("controller")
-    groups = load_role_groups()
-    nodes = load_nodes()
-    if target is not None:
-        node = find_node(target)
-        if node is not None:
-            console.print(f"[bold]Node: {node.name}[/bold]")
-            console.print(f"type: {node.runtime_role}")
-            console.print(f"groups: {', '.join(node.role_groups) if node.role_groups else 'none'}")
-            if node.parent:
-                console.print(f"parent: {node.parent}")
-            console.print(f"kind: {node.kind}")
-            return
-        group = next((item for item in groups if item.name == target.strip()), None)
-        if group is None:
-            raise typer.BadParameter(f"unknown node or group: {target}")
-        assigned_nodes = [node.name for node in nodes if group.name in node.role_groups]
-        console.print(f"[bold]Group: {group.name}[/bold]")
-        console.print(f"members: {', '.join(group.members) if group.members else 'none'}")
-        console.print(f"assigned nodes: {', '.join(assigned_nodes) if assigned_nodes else 'none'}")
-        console.print(f"description: {group.description or 'none'}")
-        return
-
-    console.print("[bold]Registered nodes[/bold]")
-    if not nodes:
-        current_name = _current_node_name()
-        current_role = _current_runtime_role()
-        if current_name and current_role:
-            table = Table(show_header=True, header_style="bold")
-            table.add_column("Node")
-            table.add_column("Type")
-            table.add_column("Groups")
-            table.add_row(f"{current_name} (local)", current_role, "")
-            console.print(table)
-        else:
-            console.print("registered nodes: none")
-    else:
-        table = Table(show_header=True, header_style="bold")
-        table.add_column("Node")
-        table.add_column("Type")
-        table.add_column("Groups")
-        current_name = _current_node_name()
-        for node in nodes:
-            label = f"{node.name} (local)" if current_name and node.name == current_name else node.name
-            table.add_row(label, node.runtime_role, ", ".join(node.role_groups) if node.role_groups else "")
-        console.print(table)
-
-    console.print("\n[bold]Defined groups[/bold]")
-    if not groups:
-        console.print("defined groups: none")
-        return
-    table = Table(show_header=True, header_style="bold")
-    table.add_column("Group")
-    table.add_column("Members")
-    table.add_column("Description")
-    for group in groups:
-        table.add_row(group.name, ", ".join(group.members) if group.members else "", group.description)
-    console.print(table)
-
-
 @role_app.command("show")
 def role_show_command(target: str | None = typer.Argument(None, help="Optional node name.")) -> None:
     """Show the local role, or one registered node role."""
@@ -962,7 +931,7 @@ def role_show_command(target: str | None = typer.Argument(None, help="Optional n
 def role_list_command() -> None:
     """List registered nodes and their roles."""
     _require_role("controller")
-    nodes = load_nodes()
+    nodes = _inventory_nodes()
     if not nodes:
         console.print("registered nodes: none")
         return
@@ -970,10 +939,16 @@ def role_list_command() -> None:
     table.add_column("Node")
     table.add_column("Role")
     table.add_column("Kind")
-    current_name = _current_node_name()
+    table.add_column("Address")
+    table.add_column("Groups")
     for node in nodes:
-        label = f"{node.name} (local)" if current_name and node.name == current_name else node.name
-        table.add_row(label, node.runtime_role, node.kind)
+        table.add_row(
+            _node_label(node.name),
+            node.runtime_role,
+            node.kind,
+            node.address or "",
+            ", ".join(node.role_groups) if node.role_groups else "",
+        )
     console.print(table)
 
 
@@ -994,29 +969,6 @@ def role_edit_command(
     console.print(f"[green]Set node role:[/green] {updated.name} -> {updated.runtime_role}")
 
 
-@inventory_app.command("name", hidden=True)
-def inventory_name_command(
-    target: str | None = typer.Argument(None, help="Optional node name. Defaults to the local node."),
-    edit: str | None = typer.Option(None, "--edit", help="New node name."),
-) -> None:
-    """Show or edit one registered node name."""
-    _require_role("controller")
-    resource = _resolve_inventory_node_target(target)
-    node = find_node(resource)
-    if node is None:
-        raise typer.BadParameter(f"unknown node: {resource}")
-    if edit is None:
-        console.print(node.name)
-        return
-    try:
-        renamed = rename_node(node.name, edit)
-        if _current_node_name() == node.name:
-            set_node_name(renamed.name)
-    except ValueError as exc:
-        raise typer.BadParameter(str(exc)) from exc
-    console.print(f"[green]Renamed node:[/green] {node.name} -> {renamed.name}")
-
-
 @node_app.command("edit")
 def node_edit_command(
     target: str = typer.Argument(..., help="Current node name."),
@@ -1026,7 +978,17 @@ def node_edit_command(
     """Edit one registered node."""
     normalized = field.strip().lower()
     if normalized == "name":
-        inventory_name_command(target, edit=value)
+        _require_role("controller")
+        node = find_node(target)
+        if node is None:
+            raise typer.BadParameter(f"unknown node: {target}")
+        try:
+            renamed = rename_node(node.name, value)
+            if _current_node_name() == node.name:
+                set_node_name(renamed.name)
+        except ValueError as exc:
+            raise typer.BadParameter(str(exc)) from exc
+        console.print(f"[green]Renamed node:[/green] {node.name} -> {renamed.name}")
         return
     if normalized == "role":
         try:
@@ -1039,23 +1001,28 @@ def node_edit_command(
 
 
 @group_app.command("list")
-def group_list_command(target: str | None = typer.Argument(None, help="Optional group name.")) -> None:
-    """List groups, or show one group."""
+def group_list_command() -> None:
+    """List groups for comparison."""
     _require_role("controller")
-    if target is None:
-        groups = load_role_groups()
-        if not groups:
-            console.print("defined groups: none")
-            return
-        table = Table(show_header=True, header_style="bold")
-        table.add_column("Group")
-        table.add_column("Members")
-        table.add_column("Description")
-        for group in groups:
-            table.add_row(group.name, ", ".join(group.members) if group.members else "", group.description)
-        console.print(table)
+    groups = load_role_groups()
+    if not groups:
+        console.print("defined groups: none")
         return
-    _show_group_details(target)
+    table = Table(show_header=True, header_style="bold")
+    table.add_column("Group")
+    table.add_column("Parents")
+    table.add_column("Children")
+    table.add_column("Nodes")
+    table.add_column("Description")
+    for group in groups:
+        table.add_row(
+            group.name,
+            ", ".join(_group_parents(group.name)),
+            str(len(group.members)),
+            str(len(_assigned_group_nodes(group.name))),
+            group.description,
+        )
+    console.print(table)
 
 
 @group_app.command("show")
@@ -1110,46 +1077,47 @@ def group_remove_command(group: str = typer.Argument(..., help="Group name.")) -
     console.print(f"[green]Removed group:[/green] {group.strip().lower()}")
 
 
-@inventory_app.command("link", hidden=True)
-def inventory_link_command(
-    parent: str = typer.Argument(..., help="Parent group name."),
-    child: str = typer.Argument(..., help="Child group name."),
-    add: bool = typer.Option(False, "--add", help="Add the link."),
-    remove: bool = typer.Option(False, "--remove", help="Remove the link."),
-) -> None:
-    """Add or remove one group-to-group link."""
-    _require_role("controller")
-    if add == remove:
-        raise typer.BadParameter("choose exactly one action: --add or --remove")
-    try:
-        if add:
-            link_role_group(parent, child)
-            console.print(f"[green]Linked group:[/green] {child.strip().lower()} -> {parent.strip().lower()}")
-        else:
-            unlink_role_group(parent, child)
-            console.print(f"[green]Unlinked group:[/green] {child.strip().lower()} from {parent.strip().lower()}")
-    except ValueError as exc:
-        raise typer.BadParameter(str(exc)) from exc
-
-
 @link_app.command("list")
-def link_list_command(group: str | None = typer.Argument(None, help="Optional parent group name.")) -> None:
-    """List group-to-group links."""
+def link_list_command() -> None:
+    """List parent-child group links."""
     _require_role("controller")
     groups = load_role_groups()
     table = Table(show_header=True, header_style="bold")
     table.add_column("Parent")
     table.add_column("Child")
+    table.add_column("Child Nodes")
+    table.add_column("Child Groups")
     rows = []
     for item in groups:
         for member in item.members:
-            if group is None or item.name == group:
-                rows.append((item.name, member))
+            child = _find_group(member)
+            rows.append((item.name, member, str(len(_assigned_group_nodes(member))), str(len(child.members) if child is not None else 0)))
     if not rows:
         console.print("group links: none")
         return
-    for parent, child in rows:
-        table.add_row(parent, child)
+    for parent, child, node_count, child_groups in rows:
+        table.add_row(parent, child, node_count, child_groups)
+    console.print(table)
+
+
+@link_app.command("show")
+def link_show_command(parent: str = typer.Argument(..., help="Parent group name.")) -> None:
+    """Show the links beneath one parent group."""
+    _require_role("controller")
+    group = _find_group(parent)
+    if group is None:
+        raise typer.BadParameter(f"unknown group: {parent}")
+    if not group.members:
+        console.print("group links: none")
+        return
+    table = Table(show_header=True, header_style="bold")
+    table.add_column("Parent")
+    table.add_column("Child")
+    table.add_column("Child Nodes")
+    table.add_column("Child Groups")
+    for member in group.members:
+        child = _find_group(member)
+        table.add_row(parent, member, str(len(_assigned_group_nodes(member))), str(len(child.members) if child is not None else 0))
     console.print(table)
 
 
@@ -1159,7 +1127,12 @@ def link_add_command(
     child: str = typer.Argument(..., help="Child group."),
 ) -> None:
     """Add one group-to-group link."""
-    inventory_link_command(parent, child, add=True, remove=False)
+    _require_role("controller")
+    try:
+        link_role_group(parent, child)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    console.print(f"[green]Linked group:[/green] {child.strip()} -> {parent.strip()}")
 
 
 @link_app.command("remove")
@@ -1168,29 +1141,12 @@ def link_remove_command(
     child: str = typer.Argument(..., help="Child group."),
 ) -> None:
     """Remove one group-to-group link."""
-    inventory_link_command(parent, child, add=False, remove=True)
-
-
-@inventory_app.command("assign", hidden=True)
-def inventory_assign_command(
-    resource: str = typer.Argument(..., help="Resource path such as host.app."),
-    group: str = typer.Argument(..., help="Group name."),
-    add: bool = typer.Option(False, "--add", help="Add the assignment."),
-    remove: bool = typer.Option(False, "--remove", help="Remove the assignment."),
-) -> None:
-    """Add or remove one node-to-group assignment."""
     _require_role("controller")
-    if add == remove:
-        raise typer.BadParameter("choose exactly one action: --add or --remove")
     try:
-        if add:
-            assign_node_role_group(resource, group)
-            console.print(f"[green]Assigned node:[/green] {resource} -> {group.strip().lower()}")
-        else:
-            unassign_node_role_group(resource, group)
-            console.print(f"[green]Removed node assignment:[/green] {resource} from {group.strip().lower()}")
+        unlink_role_group(parent, child)
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
+    console.print(f"[green]Unlinked group:[/green] {child.strip()} from {parent.strip()}")
 
 
 @node_app.command("assign")
@@ -1199,7 +1155,12 @@ def node_assign_command(
     group: str = typer.Argument(..., help="Group name."),
 ) -> None:
     """Assign one node to one group."""
-    inventory_assign_command(node, group, add=True, remove=False)
+    _require_role("controller")
+    try:
+        assign_node_role_group(node, group)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    console.print(f"[green]Assigned node:[/green] {node} -> {group}")
 
 
 @node_app.command("unassign")
@@ -1208,7 +1169,12 @@ def node_unassign_command(
     group: str = typer.Argument(..., help="Group name."),
 ) -> None:
     """Remove one node from one group."""
-    inventory_assign_command(node, group, add=False, remove=True)
+    _require_role("controller")
+    try:
+        unassign_node_role_group(node, group)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    console.print(f"[green]Removed node assignment:[/green] {node} from {group}")
 
 
 @inventory_app.command("show")
@@ -1564,6 +1530,7 @@ def _build_link_app() -> typer.Typer:
     runtime_link_app = typer.Typer(invoke_without_command=True, help="Inspect and manage parent-child group links.")
     runtime_link_app.callback()(link_callback)
     runtime_link_app.command("list")(link_list_command)
+    runtime_link_app.command("show")(link_show_command)
     runtime_link_app.command("add")(link_add_command)
     runtime_link_app.command("remove")(link_remove_command)
     return runtime_link_app
@@ -1603,14 +1570,14 @@ def _build_dev_app() -> typer.Typer:
 def _build_root_app() -> typer.Typer:
     runtime_app = typer.Typer(no_args_is_help=True, help="Manage homebase controller and managed nodes.")
     runtime_app.command("init")(init_command)
-    runtime_app.add_typer(service_app, name="service")
-    runtime_app.add_typer(_build_connect_app(), name="connect")
     runtime_app.command("status")(status_command)
     runtime_app.add_typer(_build_role_app(), name="role")
     runtime_app.add_typer(_build_node_app(), name="node")
     runtime_app.add_typer(_build_group_app(), name="group")
     runtime_app.add_typer(_build_link_app(), name="link")
     runtime_app.add_typer(inventory_app, name="inventory")
+    runtime_app.add_typer(_build_connect_app(), name="connect")
+    runtime_app.add_typer(service_app, name="service")
     runtime_app.add_typer(state_app, name="state")
     runtime_app.add_typer(_build_package_app(), name="package")
     runtime_app.add_typer(_build_dev_app(), name="dev")

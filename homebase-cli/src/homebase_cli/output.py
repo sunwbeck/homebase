@@ -8,17 +8,6 @@ from rich.table import Table
 console = Console()
 
 
-def print_resource_table(rows: list[tuple[str, str, str]]) -> None:
-    """Render a simple resource table."""
-    table = Table(title="Homebase Nodes")
-    table.add_column("Name", style="cyan")
-    table.add_column("Kind", style="green")
-    table.add_column("Address")
-    for name, kind, address in rows:
-        table.add_row(name, kind, address)
-    console.print(table)
-
-
 def print_docs_table(rows: list[tuple[str, str, str]]) -> None:
     """Render a docs overview table."""
     table = Table(title="Homebase Docs")

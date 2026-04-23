@@ -47,7 +47,7 @@ The preferred managed-node model is:
 
 Preferred rollout model:
 
-- GitHub is the source of truth for `homebase` version and rollout identity
+- GitHub defines `homebase` version and rollout identity
 - `control` selects the GitHub ref that should be installed
 - managed nodes report which `homebase` revision is currently installed
 - the operator should be able to roll one canary node first and then expand rollout from `control`

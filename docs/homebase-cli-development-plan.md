@@ -30,7 +30,7 @@ The preferred architecture is control-centric with a thin client on each managed
 
 Design rule:
 
-- `control` remains the operator entry point and source of truth
+- `control` remains the operator entry point
 - each managed node runs a lightweight `homebase` client
 - the client should self-report identity and current local facts
 - the client should not become a heavy autonomous management plane
@@ -40,10 +40,10 @@ Design rule:
 Near-term operator flow:
 
 1. install `homebase` on the target node
-2. run `homebase client code --refresh` on the target node and read the 8-digit code locally
-3. run `homebase client serve` on the target node
-4. run `homebase node scan` from `control` to discover responding homebase clients
-5. run `homebase node add`, choose one discovered device, and enter the 8-digit code shown on the target node
+2. run `homebase connect code --refresh` on the target node and read the 8-digit code locally
+3. run `homebase service start` on the target node
+4. run `homebase connect scan` from `control` to discover responding homebase clients
+5. run `homebase connect add`, choose one discovered device, and enter the 8-digit code shown on the target node
 
 This keeps discovery generic while making node identity explicit and self-reported. It also separates discovery from trust:
 
@@ -67,7 +67,7 @@ Required responsibilities:
 Non-goals for the client:
 
 - do not store long-lived metrics or logs
-- do not become the policy source of truth
+- do not become the policy owner
 - do not perform complex orchestration on its own
 - do not own Prometheus or Grafana-like storage-heavy services
 
@@ -95,10 +95,10 @@ Phase 1 should focus on read-only and low-risk operations first.
 - `homebase info <resource>`
 - `homebase ls`
 - `homebase ls <resource>`
-- `homebase client code`
-- `homebase client serve`
-- `homebase node scan`
-- `homebase node add`
+- `homebase connect code`
+- `homebase connect scan`
+- `homebase connect add`
+- `homebase service start`
 - `homebase ssh <resource>`
 
 ### Next commands
@@ -182,7 +182,7 @@ The same package should provide both:
 
 Version and rollout preference:
 
-- GitHub should be the source of truth for `homebase` history, tags, releases, and rollout targets
+- GitHub should own `homebase` history, tags, releases, and rollout targets
 - `homebase` should not grow its own parallel package registry or version catalog
 - the control plane should decide which GitHub ref is the desired target for one node or many nodes
 
@@ -219,7 +219,7 @@ Long-term rollout preference:
 
 ## Source of Truth Rules
 
-The implementation should maintain a single source of truth for resource identity.
+The implementation should maintain one canonical definition of resource identity.
 
 Required rule:
 
@@ -314,7 +314,7 @@ Recommended order:
 2. choose one GitHub ref as the canary target
 3. have `control` install or upgrade that canary node to the chosen ref
 4. restart or validate the client service if needed
-5. run `homebase node scan` and a pairing or status smoke test from `control`
+5. run `homebase connect scan` and a pairing or status smoke test from `control`
 
 The canary node should be the first place where:
 
@@ -345,9 +345,9 @@ Recommended near-term commands should evolve toward:
 
 ```text
 git push
-homebase install <resource>
-homebase upgrade <resource>
-homebase client serve
+homebase package install <resource> --ref <git-ref>
+homebase package update <resource>
+homebase service start
 ```
 
 The important rule is that `git` and GitHub define the revision, while `homebase` performs the install and orchestration work.

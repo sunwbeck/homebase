@@ -23,7 +23,7 @@ This checklist exists so `homebase` CLI work can continue as if one person had b
 
 - `[~]` CLI codebase has been bootstrapped
 - `[~]` canonical resource model exists in code
-- `[x]` agent-first node discovery exists through `homebase client serve` and `homebase node scan`
+- `[x]` agent-first node discovery exists through `homebase service start` and `homebase connect scan`
 - `[x]` 8-digit client-generated pairing gate exists before full profile fetch
 - `[~]` GitHub-based install and rollout workflow is partially implemented for the current node
 - `[ ]` persistent client service packaging exists for managed nodes
@@ -91,7 +91,7 @@ This checklist exists so `homebase` CLI work can continue as if one person had b
 
 - `[~]` implement `homebase ls`
 - `[~]` implement `homebase info <resource>`
-- `[x]` implement `homebase node scan`
+- `[x]` implement `homebase connect scan`
 - `[ ]` implement `homebase status`
 - `[ ]` implement `homebase status <resource>`
 - `[~]` define output format for unknown or offline nodes
@@ -139,7 +139,7 @@ This checklist exists so `homebase` CLI work can continue as if one person had b
 
 ### 8.5. Client lifecycle and rollout
 
-- `[~]` document how `homebase client serve` should run persistently on a node
+- `[~]` document how `homebase service start` should run persistently on a node
 - `[ ]` add a packaged systemd unit or rendered unit template for Linux nodes
 - `[x]` add one install command that follows normal Python environment behavior
 - `[x]` add one upgrade command driven by a GitHub ref or equivalent rollout target

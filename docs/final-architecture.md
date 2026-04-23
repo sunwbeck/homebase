@@ -188,4 +188,4 @@ The infrastructure host is subdivided into three VMs:
 
 This gives the system clear separation between management, interactive computing, persistent storage, application hosting, and higher-risk autonomous workloads.
 
-The `homebase` repository itself should live on NAS-backed storage so the operational workspace and its artifacts remain centralized with the rest of the infrastructure state.
+The `homebase` repository should stay in git with a normal checked-out working copy. Shared storage is for runtime artifacts, backups, and datasets, not for defining a separate canonical docs root.

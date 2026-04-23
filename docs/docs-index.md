@@ -17,7 +17,7 @@ This document is a short map of where information lives in the `homebase` docume
 - current implementation status
 - which VMs already exist
 - immediate next steps
-- current direction for moving the working directory onto NAS
+- current implementation direction and active working policy
 
 `docs/system-overview.md`
 
@@ -59,7 +59,7 @@ This document is a short map of where information lives in the `homebase` docume
 - storage node direction
 - disk layout options
 - backup approach
-- repository placement on NAS-backed storage
+- repository and docs workflow
 
 ## CLI Documents
 
@@ -81,7 +81,7 @@ This document is a short map of where information lives in the `homebase` docume
 
 `docs/nas-migration.md`
 
-- runbook for moving the working directory onto NAS
+- historical NAS migration notes
 - copy, verification, symlink, and rollback steps
 
 ## Suggested Reading Order
