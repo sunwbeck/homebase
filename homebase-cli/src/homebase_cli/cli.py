@@ -86,6 +86,7 @@ from homebase_cli.selftest import run_client_self_test
 from homebase_cli.settings import (
     load_settings,
     runtime_roles,
+    set_node_description as set_local_node_description,
     set_node_name,
     set_role,
 )
@@ -127,7 +128,11 @@ package_app = typer.Typer(
 dev_app = typer.Typer(help="Development, diagnostics, and internal helper commands.")
 service_app = typer.Typer(
     invoke_without_command=True,
-    help="Run the local background service on this node.",
+    help="Inspect services exposed by registered nodes.",
+)
+daemon_app = typer.Typer(
+    invoke_without_command=True,
+    help="Run the local background runtime on this node.",
 )
 console = Console()
 DEFAULT_KIND_CHOICES = ("controller", "workstation", "host", "vm", "node")
@@ -451,14 +456,21 @@ def _print_local_role() -> None:
     settings = load_settings()
     console.print(f"role: {settings.role or 'not set'}")
     console.print(f"node: {settings.node_name or 'not set'}")
+    console.print(f"description: {settings.node_description or ''}")
 
 
 def _set_local_role(runtime_role: str) -> None:
     try:
         updated = set_role(runtime_role)
         local_name = _current_node_name()
+        local_settings = load_settings()
         if local_name:
-            ensure_local_node(local_name, updated.role or "managed", runtime_hostname=socket.gethostname())
+            ensure_local_node(
+                local_name,
+                updated.role or "managed",
+                runtime_hostname=socket.gethostname(),
+                description=local_settings.node_description or "",
+            )
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
     console.print(f"[green]Set local node type to {updated.role}[/green]")
@@ -521,6 +533,15 @@ def link_callback(ctx: typer.Context) -> None:
 @service_app.callback()
 def service_callback(ctx: typer.Context) -> None:
     """Show standard help when service is called without a subcommand."""
+    if ctx.invoked_subcommand is not None:
+        return
+    console.print(ctx.get_help())
+    raise typer.Exit(code=0)
+
+
+@daemon_app.callback()
+def daemon_callback(ctx: typer.Context) -> None:
+    """Show standard help when daemon is called without a subcommand."""
     if ctx.invoked_subcommand is not None:
         return
     console.print(ctx.get_help())
@@ -622,7 +643,7 @@ def node_scan_command(
     port: int = typer.Option(DEFAULT_CLIENT_PORT, "--port", help="TCP port exposed by the homebase client."),
     timeout: float = typer.Option(0.35, "--timeout", help="Per-host timeout in seconds."),
 ) -> None:
-    """Scan the local network for managed nodes that are running `homebase service start`.
+    """Scan the local network for managed nodes that are running `homebase daemon start`.
 
     Run this on the controller before `homebase connect add`.
     """
@@ -668,7 +689,7 @@ def node_add_command(
     """Pair one discovered managed node and register it in the local inventory.
 
     Typical flow:
-      1. On the managed node, run `homebase connect code` and `homebase service start`
+      1. On the managed node, run `homebase connect code` and `homebase daemon start`
       2. On the controller, run `homebase connect scan`
       3. Then run this command and enter the 8-digit pairing code
     """
@@ -679,7 +700,11 @@ def node_add_command(
     resolved_parent = parent if parent is not None else _choose_parent()
     resolved_kind = kind if kind is not None else _choose_kind()
     resolved_ssh_user = ssh_user if ssh_user is not None else typer.prompt("SSH user", default="", show_default=False).strip() or None
-    resolved_description = description or typer.prompt("Description", default="", show_default=False).strip()
+    resolved_description = description or typer.prompt(
+        "Description",
+        default=profile.description or "",
+        show_default=bool(profile.description),
+    ).strip()
     try:
         node = add_node(
             name=resolved_name,
@@ -812,18 +837,24 @@ def node_list_command(resource: str | None = typer.Argument(None, help="Optional
             console.print(f"[yellow]No children under {resource}.[/yellow]")
         return
     table = Table(show_header=True, header_style="bold")
-    table.add_column("Node")
-    table.add_column("Role")
-    table.add_column("Kind")
-    table.add_column("Address")
-    table.add_column("Groups")
-    table.add_column("Description")
+    table.add_column("Node", no_wrap=True)
+    table.add_column("Role", no_wrap=True)
+    table.add_column("Address", no_wrap=True)
+    table.add_column("Hostname", no_wrap=True)
+    table.add_column("Groups", overflow="fold")
+    table.add_column("Description", overflow="ellipsis")
+    current_name = _current_node_name()
     for item in resources:
+        address_value = item.address
+        hostname_value = item.runtime_hostname or ""
+        if current_name and item.name == current_name:
+            address_value = address_value or detect_primary_address() or ""
+            hostname_value = hostname_value or socket.gethostname().strip() or ""
         table.add_row(
             _node_label(item.name),
             item.runtime_role,
-            item.kind,
-            item.address or "",
+            address_value or "",
+            hostname_value,
             ", ".join(item.role_groups) if item.role_groups else "",
             item.description,
         )
@@ -835,7 +866,7 @@ def node_show_command(resource: str = typer.Argument(..., help="Canonical node n
     """Show one node in detail.
 
     The detailed view includes identity, runtime, network, hierarchy, groups,
-    saved state labels, and direct children.
+    and direct children.
     """
     _require_role("controller")
     _show_node_details(resource)
@@ -951,13 +982,13 @@ def _run_controller_service_forever() -> None:
         time.sleep(3600)
 
 
-@service_app.command("start")
-def service_start_command(
+@daemon_app.command("start")
+def daemon_start_command(
     host: str = typer.Option("0.0.0.0", "--host", help="Listen address for the managed connect endpoint."),
     port: int = typer.Option(DEFAULT_CLIENT_PORT, "--port", help="Listen port for the managed connect endpoint."),
     foreground: bool = typer.Option(False, "--foreground", hidden=True),
 ) -> None:
-    """Start the local background service for this node.
+    """Start the local background runtime for this node.
 
     Managed nodes expose the connect endpoint here.
     Controller nodes run the long-lived controller daemon here.
@@ -988,7 +1019,7 @@ def service_start_command(
         sys.executable,
         "-m",
         "homebase_cli.cli",
-        "service",
+        "daemon",
         "start",
         "--host",
         host,
@@ -1028,9 +1059,9 @@ def service_start_command(
     console.print(f"log: {CONNECT_LOG_PATH}")
 
 
-@service_app.command("status")
-def service_status_command() -> None:
-    """Show the local background service status on this node."""
+@daemon_app.command("status")
+def daemon_status_command() -> None:
+    """Show the local background runtime status on this node."""
     current_role = _current_runtime_role()
     local_name = _current_node_name() or socket.gethostname()
     address = detect_primary_address() or ""
@@ -1075,51 +1106,168 @@ def service_status_command() -> None:
     console.print(f"started at: {runtime.started_at}")
 
 
-@service_app.command("stop")
-def service_stop_command() -> None:
-    """Stop the local background service on this node."""
+@daemon_app.command("stop")
+def daemon_stop_command() -> None:
+    """Stop the local background runtime on this node."""
     runtime = stop_connect_server()
     if runtime is None:
-        console.print("service: stopped")
+        console.print("daemon: stopped")
         return
-    console.print(f"stopped service (pid {runtime.pid})")
+    console.print(f"stopped daemon (pid {runtime.pid})")
 
 
-def _run_init(role: str | None = None, name: str | None = None) -> None:
+def _node_exposed_services(node) -> tuple[str, ...]:
+    """Return exposed services for one node, using live local data when possible."""
+    if _current_node_name() and node.name == _current_node_name():
+        try:
+            return local_profile().services
+        except Exception:
+            return node.services
+    return node.services
+
+
+def _node_exposure_summary(node) -> str:
+    """Return one short exposure summary for one node."""
+    if _current_node_name() and node.name == _current_node_name():
+        try:
+            return _format_exposure_summary(detect_exposed_endpoints())
+        except Exception:
+            pass
+    endpoints = node.exposed_endpoints or tuple((port, describe_port(port), None) for port in node.open_ports)
+    return _format_exposure_summary(endpoints)
+
+
+@service_app.command("list")
+def service_list_command(
+    resource: str | None = typer.Argument(None, help="Optional node name."),
+    group: str | None = typer.Option(None, "--group", help="Optional group name."),
+) -> None:
+    """List exposed services across all nodes, one node, or one group."""
+    current_role = _current_runtime_role()
+    if current_role == "managed":
+        if resource is not None or group is not None:
+            raise typer.BadParameter("managed nodes can only list local services")
+        local_name = _current_node_name() or socket.gethostname()
+        local_node = find_node(local_name) or ensure_local_node(local_name, current_role or "managed", runtime_hostname=socket.gethostname())
+        table = Table(show_header=True, header_style="bold")
+        table.add_column("Node")
+        table.add_column("Services")
+        table.add_column("Exposure")
+        table.add_row(_node_label(local_node.name), ", ".join(_node_exposed_services(local_node)), _node_exposure_summary(local_node))
+        console.print(table)
+        return
+
+    _require_role("controller")
+    nodes = list(_inventory_nodes())
+    if group is not None:
+        nodes = [node for node in nodes if group in node.role_groups]
+    if resource is not None:
+        nodes = [node for node in nodes if node.name == resource]
+        if not nodes:
+            raise typer.BadParameter(f"unknown node: {resource}")
+    if not nodes:
+        console.print("[yellow]No matching nodes.[/yellow]")
+        return
+    table = Table(show_header=True, header_style="bold")
+    table.add_column("Node")
+    table.add_column("Services")
+    table.add_column("Exposure")
+    for node in nodes:
+        table.add_row(
+            _node_label(node.name),
+            ", ".join(_node_exposed_services(node)),
+            _node_exposure_summary(node),
+        )
+    console.print(table)
+
+
+@service_app.command("show")
+def service_show_command(
+    resource: str | None = typer.Argument(None, help="Optional node name."),
+) -> None:
+    """Show exposed and running services for one node in detail."""
+    current_role = _current_runtime_role()
+    selected_name = resource
+    if current_role == "managed":
+        if resource is not None and resource != (_current_node_name() or ""):
+            raise typer.BadParameter("managed nodes can only show local services")
+        selected_name = _current_node_name() or socket.gethostname()
+    else:
+        _require_role("controller")
+        selected_name = resource or _choose_registered_node()
+    node = find_node(selected_name)
+    if node is None:
+        raise typer.BadParameter(f"unknown node: {selected_name}")
+    local_node = _current_node_name() and node.name == _current_node_name()
+    all_services = tuple(detect_running_services()) if local_node else node.services
+    endpoints = detect_exposed_endpoints() if local_node else (node.exposed_endpoints or tuple((port, describe_port(port), None) for port in node.open_ports))
+    console.print(f"[bold]Services: {_node_label(node.name)}[/bold]")
+    table = Table(show_header=False, box=None)
+    table.add_column("Field", style="bold")
+    table.add_column("Value")
+    table.add_row("hostname", node.runtime_hostname or "")
+    table.add_row("address", node.address or "")
+    table.add_row("exposed services", ", ".join(_node_exposed_services(node)))
+    table.add_row("all services", ", ".join(all_services))
+    table.add_row("exposure", _format_endpoint_details(endpoints))
+    console.print(table)
+
+
+def _run_init(role: str | None = None, name: str | None = None, description: str | None = None) -> None:
     """Initialize this installation with a local role and node name."""
+    current_settings = load_settings()
     if role is None:
         console.print("[bold]Initial setup[/bold]")
         console.print("Choose how this node will participate in homebase.")
         console.print("1. local runtime role: controller or managed")
         console.print("2. local node name: used in status, inventory, and pairing output")
+        console.print("3. local description: short note shown in node lists and passed to the controller on connect")
     selected = role.strip().lower() if role is not None else _choose_runtime_role()
+    if selected == "control":
+        selected = "controller"
+    elif selected == "client":
+        selected = "managed"
+    if selected not in runtime_roles():
+        raise typer.BadParameter(f"role must be one of: {', '.join(runtime_roles())}")
     selected_name = (name.strip() if name is not None else "") or typer.prompt(
         "Local node name",
         default=_current_node_name() or socket.gethostname(),
     )
+    selected_description = (
+        description.strip() if description is not None else ""
+    ) or typer.prompt(
+        "Local description",
+        default=current_settings.node_description or "",
+        show_default=bool(current_settings.node_description),
+    ).strip()
     try:
         updated = set_role(selected)
         previous_name = _current_node_name()
         set_node_name(selected_name)
+        set_local_node_description(selected_description)
         local_node = ensure_local_node(
             selected_name,
             updated.role or "managed",
             runtime_hostname=socket.gethostname(),
+            description=selected_description,
             previous_name=previous_name,
         )
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
     console.print(f"[green]Set local node type to {updated.role}[/green]")
     console.print(f"[green]Registered local node name:[/green] {local_node.name}")
+    if selected_description:
+        console.print(f"[green]Registered local description:[/green] {selected_description}")
 
 
 @app.command("init")
 def init_command(
     role: str | None = typer.Option(None, "--role", help="Optional node type to set directly: controller or managed."),
     name: str | None = typer.Option(None, "--name", help="Optional local node name to register directly."),
+    description: str | None = typer.Option(None, "--description", help="Optional short local description."),
 ) -> None:
     """Initialize this installation by choosing the local role and node name."""
-    _run_init(role=role, name=name)
+    _run_init(role=role, name=name, description=description)
 
 
 @role_app.command("show")
@@ -1220,6 +1368,8 @@ def node_edit_command(
 
         try:
             updated = set_node_description(node.name, selected_value)
+            if _current_node_name() == node.name:
+                set_local_node_description(selected_value)
         except ValueError as exc:
             raise typer.BadParameter(str(exc)) from exc
         console.print(f"[green]Updated node description:[/green] {updated.name}")
@@ -1786,9 +1936,10 @@ def _build_root_app() -> typer.Typer:
     runtime_app.command("status")(status_command)
     runtime_app.command("doc")(docs_command)
     runtime_app.command("docs", hidden=True)(docs_alias_command)
-    runtime_app.add_typer(_build_role_app(), name="role")
     runtime_app.add_typer(_build_connect_app(), name="connect")
+    runtime_app.add_typer(daemon_app, name="daemon")
     runtime_app.add_typer(service_app, name="service")
+    runtime_app.add_typer(_build_role_app(), name="role")
     runtime_app.add_typer(_build_package_app(), name="package")
     runtime_app.add_typer(_build_dev_app(), name="dev")
     if current_role == "controller":

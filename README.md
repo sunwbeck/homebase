@@ -8,7 +8,7 @@ What it does:
 
 - discovers and registers managed nodes
 - shows node information and basic status
-- runs a small background service on each node
+- runs a small background daemon on each node
 - installs and updates `homebase` from GitHub refs
 - lets the controller node request installs and updates on other paired nodes
 
@@ -59,17 +59,17 @@ On a managed node:
 ```bash
 homebase init
 homebase connect code --refresh
-homebase service start
+homebase daemon start
 ```
 
 Pairing flow:
 
-1. start `homebase service start` on the target node
+1. start `homebase daemon start` on the target node
 2. read the 8-digit code from `homebase connect code --refresh`
 3. run `homebase connect scan` on the controller node
 4. run `homebase connect add` on the controller node and enter the code
 
-`homebase init` registers the current machine with a local node name as well as a node type.
+`homebase init` registers the current machine with a local node name, runtime role, and short description.
 
 ## Package Commands
 
@@ -108,6 +108,9 @@ homebase node list
 homebase node show host.app
 homebase node edit host.app
 homebase role edit host.app
+homebase service list
+homebase service list --group app-tier
+homebase service show host.app
 homebase node assign host.app app-tier
 homebase node unassign host.app app-tier
 homebase group list

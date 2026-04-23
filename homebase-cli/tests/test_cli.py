@@ -115,10 +115,15 @@ def test_init_sets_controller_role(monkeypatch) -> None:
     runner = CliRunner()
     with runner.isolated_filesystem():
         app = load_app(monkeypatch, "settings.toml")
-        result = runner.invoke(app, ["init", "--role", "control", "--name", "control"], env={"HOMEBASE_SETTINGS_PATH": "settings.toml"})
+        result = runner.invoke(
+            app,
+            ["init", "--role", "control", "--name", "control", "--description", "main controller"],
+            env={"HOMEBASE_SETTINGS_PATH": "settings.toml"},
+        )
         assert result.exit_code == 0
         assert "Set local node type to controller" in result.stdout
         assert "Registered local node name: control" in result.stdout
+        assert "Registered local description: main controller" in result.stdout
 
 
 def test_role_edit_without_args_prompts_for_local_role(monkeypatch) -> None:
@@ -162,14 +167,16 @@ def test_init_interactive_can_choose_managed(monkeypatch) -> None:
     runner = CliRunner()
     with runner.isolated_filesystem():
         app = load_app(monkeypatch, "settings.toml")
-        result = runner.invoke(app, ["init"], env={"HOMEBASE_SETTINGS_PATH": "settings.toml"}, input="2\napp\n")
+        result = runner.invoke(app, ["init"], env={"HOMEBASE_SETTINGS_PATH": "settings.toml"}, input="2\napp\napplication vm\n")
         assert result.exit_code == 0
         assert "Initial setup" in result.stdout
         assert "Choose how this node will participate in homebase." in result.stdout
         assert "local runtime role" in result.stdout
         assert "Local node name" in result.stdout
+        assert "Local description" in result.stdout
         assert "Set local node type to managed" in result.stdout
         assert "Registered local node name: app" in result.stdout
+        assert "Registered local description: application vm" in result.stdout
 
 
 def test_pick_from_list_accepts_exact_value(monkeypatch) -> None:
@@ -181,7 +188,7 @@ def test_pick_from_list_accepts_exact_value(monkeypatch) -> None:
 def test_main_starts_init_automatically_when_uninitialized(monkeypatch, capsys) -> None:
     module = load_module(monkeypatch, "settings.toml")
     called: dict[str, bool] = {"ran": False}
-    monkeypatch.setattr(module, "_run_init", lambda role=None, name=None: called.__setitem__("ran", True))
+    monkeypatch.setattr(module, "_run_init", lambda role=None, name=None, description=None: called.__setitem__("ran", True))
     monkeypatch.setattr(sys, "argv", ["hb"])
     module.main()
     captured = capsys.readouterr()
@@ -191,7 +198,7 @@ def test_main_starts_init_automatically_when_uninitialized(monkeypatch, capsys) 
 
 def test_main_handles_abort_without_traceback(monkeypatch, capsys) -> None:
     module = load_module(monkeypatch, "settings.toml")
-    monkeypatch.setattr(module, "_run_init", lambda role=None, name=None: (_ for _ in ()).throw(click.Abort()))
+    monkeypatch.setattr(module, "_run_init", lambda role=None, name=None, description=None: (_ for _ in ()).throw(click.Abort()))
     monkeypatch.setattr(sys, "argv", ["hb"])
     with pytest.raises(SystemExit) as exc:
         module.main()
@@ -279,7 +286,7 @@ def test_status_shows_local_node(monkeypatch) -> None:
     with runner.isolated_filesystem():
         env = {"HOMEBASE_SETTINGS_PATH": "settings.toml", "HOMEBASE_REGISTRY_PATH": "nodes.toml", "COLUMNS": "240"}
         app = load_app(monkeypatch, "settings.toml")
-        result = runner.invoke(app, ["init", "--role", "controller", "--name", "control"], env=env)
+        result = runner.invoke(app, ["init", "--role", "controller", "--name", "control", "--description", "main controller"], env=env)
         assert result.exit_code == 0
         app = load_app(monkeypatch, "settings.toml")
         status_result = runner.invoke(app, ["status"], env=env)
@@ -338,7 +345,7 @@ def test_managed_status_shows_self_and_paired_controllers(monkeypatch) -> None:
         assert "State" not in result.stdout
 
 
-def test_service_status_includes_local_identity(monkeypatch) -> None:
+def test_daemon_status_includes_local_identity(monkeypatch) -> None:
     runner = CliRunner()
     with runner.isolated_filesystem():
         env = {"HOMEBASE_SETTINGS_PATH": "settings.toml", "COLUMNS": "240"}
@@ -356,12 +363,36 @@ def test_service_status_includes_local_identity(monkeypatch) -> None:
                 log_path="/tmp/connect.log",
             ),
         )
-        result = runner.invoke(app, ["service", "status"], env=env)
+        result = runner.invoke(app, ["daemon", "status"], env=env)
         assert result.exit_code == 0
         assert "app" in result.stdout
         assert "managed" in result.stdout
         assert "192.168.0.20" in result.stdout
         assert "0.0.0.0:8428" in result.stdout
+
+
+def test_service_list_shows_local_services(monkeypatch) -> None:
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        env = {"HOMEBASE_SETTINGS_PATH": "settings.toml", "COLUMNS": "240"}
+        Path("settings.toml").write_text('role = "managed"\nnode_name = "app"\n', encoding="utf-8")
+        app = load_app(monkeypatch, "settings.toml")
+        monkeypatch.setattr(
+            "homebase_cli.cli.find_node",
+            lambda name: SimpleNamespace(
+                name="app",
+                services=("ssh", "docker"),
+                exposed_endpoints=((22, "ssh", "sshd"), (8428, "homebase", "python")),
+            ),
+        )
+        monkeypatch.setattr("homebase_cli.cli.local_profile", lambda: ClientProfile(node_id="node-1", hostname="app", platform="Linux 6.1", version="0.1.8", services=("ssh", "docker")))
+        monkeypatch.setattr("homebase_cli.cli.detect_exposed_endpoints", lambda: ((22, "ssh", "sshd"), (8428, "homebase", "python")))
+        result = runner.invoke(app, ["service", "list"], env=env)
+        assert result.exit_code == 0
+        assert "Services" in result.stdout
+        assert "Exposure" in result.stdout
+        assert "ssh, docker" in result.stdout
+        assert "ssh:22, homebase:8428" in result.stdout
 
 
 def test_node_edit_name_updates_local_node_name(monkeypatch) -> None:
@@ -407,6 +438,26 @@ def test_node_edit_description_updates_description(monkeypatch) -> None:
         assert "Updated node description:" in result.stdout
 
 
+def test_node_edit_description_updates_local_settings_when_local(monkeypatch) -> None:
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        env = {"HOMEBASE_SETTINGS_PATH": "settings.toml", "HOMEBASE_REGISTRY_PATH": "nodes.toml"}
+        Path("settings.toml").write_text(
+            'role = "controller"\nnode_name = "control"\nnode_description = "old description"\n',
+            encoding="utf-8",
+        )
+        Path("nodes.toml").write_text(
+            '[[nodes]]\nname = "control"\nkind = "controller"\nruntime_role = "controller"\ndescription = "old description"\n',
+            encoding="utf-8",
+        )
+        app = load_app(monkeypatch, "settings.toml")
+        picks = iter(["control (local)", "description"])
+        monkeypatch.setattr("homebase_cli.cli._pick_from_list", lambda label, options: next(picks))
+        result = runner.invoke(app, ["node", "edit"], env=env, input="new description\n")
+        assert result.exit_code == 0
+        assert 'node_description = "new description"' in Path("settings.toml").read_text(encoding="utf-8")
+
+
 def test_node_list_shows_address_and_description(monkeypatch) -> None:
     runner = CliRunner()
     with runner.isolated_filesystem():
@@ -423,6 +474,23 @@ def test_node_list_shows_address_and_description(monkeypatch) -> None:
         assert "Description" in result.stdout
         assert "192.168.0.20" in result.stdout
         assert "application vm" in result.stdout
+
+
+def test_node_list_uses_live_local_address(monkeypatch) -> None:
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        env = {"HOMEBASE_SETTINGS_PATH": "settings.toml", "HOMEBASE_REGISTRY_PATH": "nodes.toml", "COLUMNS": "240"}
+        Path("settings.toml").write_text('role = "controller"\nnode_name = "control"\n', encoding="utf-8")
+        Path("nodes.toml").write_text(
+            '[[nodes]]\nname = "control"\nkind = "controller"\nruntime_role = "controller"\ndescription = "main controller"\n',
+            encoding="utf-8",
+        )
+        app = load_app(monkeypatch, "settings.toml")
+        monkeypatch.setattr("homebase_cli.cli.detect_primary_address", lambda: "192.168.0.10")
+        monkeypatch.setattr("homebase_cli.cli.socket.gethostname", lambda: "control")
+        result = runner.invoke(app, ["node", "list"], env=env)
+        assert result.exit_code == 0
+        assert "192.168.0.10" in result.stdout
 
 
 def test_node_show_uses_endpoint_details_without_states(monkeypatch) -> None:

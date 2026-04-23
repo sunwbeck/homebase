@@ -8,7 +8,8 @@ Current implementation direction:
 
 - one CLI surface for both controller and managed nodes
 - `connect` for pairing and discovery
-- `service` for background runtime
+- `daemon` for background runtime
+- `service` for inspecting exposed services on nodes and groups
 - GitHub-backed install and update flow through `homebase package`
 - repo-local docs are updated with the code, rather than keeping a separate NAS docs root
 
@@ -27,7 +28,8 @@ Current priority:
 - make `status`, `node`, `group`, and `link` outputs clearly useful
 - make root and subcommand `--help` output self-sufficient for both humans and LLMs
 - keep one command grammar across controller and managed nodes
-- move background responsibilities under `service`
+- keep background responsibilities under `daemon`
+- keep service inspection under `service`
 - prepare the controller runtime for upcoming reverse proxy work
 - keep install and rollout behavior GitHub-ref driven
 - keep status output focused on usable exposure and runtime information rather than operator label fields

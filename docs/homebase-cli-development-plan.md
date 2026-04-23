@@ -41,7 +41,7 @@ Near-term operator flow:
 
 1. install `homebase` on the target node
 2. run `homebase connect code --refresh` on the target node and read the 8-digit code locally
-3. run `homebase service start` on the target node
+3. run `homebase daemon start` on the target node
 4. run `homebase connect scan` from `control` to discover responding homebase clients
 5. run `homebase connect add`, choose one discovered device, and enter the 8-digit code shown on the target node
 
@@ -98,7 +98,7 @@ Phase 1 should focus on read-only and low-risk operations first.
 - `homebase connect code`
 - `homebase connect scan`
 - `homebase connect add`
-- `homebase service start`
+- `homebase daemon start`
 - `homebase ssh <resource>`
 
 ### Next commands
@@ -347,7 +347,7 @@ Recommended near-term commands should evolve toward:
 git push
 homebase package install <resource> --ref <git-ref>
 homebase package update <resource>
-homebase service start
+homebase daemon start
 ```
 
 The important rule is that `git` and GitHub define the revision, while `homebase` performs the install and orchestration work.

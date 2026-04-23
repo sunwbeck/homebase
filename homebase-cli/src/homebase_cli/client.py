@@ -20,6 +20,7 @@ from typing import Any
 
 from homebase_cli.packaging import DEFAULT_REPO_URL, load_install_state, install_github_ref, latest_github_version
 from homebase_cli.paths import LOCAL_CLI_ROOT
+from homebase_cli.settings import load_settings
 
 
 DEFAULT_CLIENT_PORT = 8428
@@ -43,6 +44,7 @@ class ClientDiscovery:
     hostname: str
     platform: str
     version: str
+    description: str = ""
     pairing_required: bool = True
 
 
@@ -54,6 +56,7 @@ class ClientProfile:
     hostname: str
     platform: str
     version: str
+    description: str = ""
     open_ports: tuple[int, ...] = ()
     services: tuple[str, ...] = ()
     exposed_endpoints: tuple[tuple[int, str, str | None], ...] = ()
@@ -375,11 +378,13 @@ def local_discovery() -> ClientDiscovery:
     machine_id = read_machine_id()
     node_id = machine_id if machine_id else hostname
     platform_label = f"{platform_module.system()} {platform_module.release()}".strip()
+    settings = load_settings()
     return ClientDiscovery(
         node_id=node_id,
         hostname=hostname,
         platform=platform_label,
         version=cli_version(),
+        description=settings.node_description or "",
     )
 
 
@@ -392,6 +397,7 @@ def local_profile() -> ClientProfile:
         hostname=discovery.hostname,
         platform=discovery.platform,
         version=discovery.version,
+        description=discovery.description,
         open_ports=tuple(port for port, _, _ in exposed_endpoints),
         services=tuple(dict.fromkeys(purpose for _, purpose, _ in exposed_endpoints)),
         exposed_endpoints=exposed_endpoints,
@@ -405,6 +411,7 @@ def parse_discovery_payload(payload: dict[str, Any]) -> ClientDiscovery:
     platform = str(payload.get("platform", "")).strip()
     version_value = str(payload.get("version", "")).strip()
     pairing_required = bool(payload.get("pairing_required", True))
+    description = str(payload.get("description", "")).strip()
     if not node_id:
         raise ValueError("discovery payload is missing node_id")
     if not hostname:
@@ -418,6 +425,7 @@ def parse_discovery_payload(payload: dict[str, Any]) -> ClientDiscovery:
         hostname=hostname,
         platform=platform,
         version=version_value,
+        description=description,
         pairing_required=pairing_required,
     )
 
@@ -449,6 +457,7 @@ def parse_profile_payload(payload: dict[str, Any]) -> ClientProfile:
         hostname=discovery.hostname,
         platform=discovery.platform,
         version=discovery.version,
+        description=discovery.description,
         open_ports=open_ports,
         services=services,
         exposed_endpoints=tuple(sorted(exposed_endpoints, key=lambda item: item[0])),
