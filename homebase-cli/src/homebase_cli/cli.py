@@ -1656,7 +1656,8 @@ def _build_link_app() -> typer.Typer:
 def _build_role_app() -> typer.Typer:
     runtime_role_app = typer.Typer(invoke_without_command=True, help=role_app.info.help)
     runtime_role_app.callback()(role_callback)
-    runtime_role_app.command("list")(role_list_command)
+    if _current_runtime_role() == "controller":
+        runtime_role_app.command("list")(role_list_command)
     runtime_role_app.command("show")(role_show_command)
     runtime_role_app.command("edit")(role_edit_command)
     return runtime_role_app
@@ -1679,27 +1680,30 @@ def _build_package_app() -> typer.Typer:
 def _build_dev_app() -> typer.Typer:
     runtime_dev_app = typer.Typer(help=dev_app.info.help)
     runtime_dev_app.command("self-test")(dev_self_test_command)
-    runtime_dev_app.command("docs")(docs_command)
-    runtime_dev_app.add_typer(ansible_app, name="ansible")
+    if _current_runtime_role() == "controller":
+        runtime_dev_app.command("docs")(docs_command)
+        runtime_dev_app.add_typer(ansible_app, name="ansible")
     return runtime_dev_app
 
 
 def _build_root_app() -> typer.Typer:
     runtime_app = typer.Typer(no_args_is_help=True, help=app.info.help)
+    current_role = _current_runtime_role()
     runtime_app.command("init")(init_command)
-    runtime_app.command("status")(status_command)
     runtime_app.command("doc")(docs_command)
     runtime_app.command("docs", hidden=True)(docs_alias_command)
     runtime_app.add_typer(_build_role_app(), name="role")
-    runtime_app.add_typer(_build_node_app(), name="node")
-    runtime_app.add_typer(_build_group_app(), name="group")
-    runtime_app.add_typer(_build_link_app(), name="link")
-    runtime_app.add_typer(inventory_app, name="inventory")
     runtime_app.add_typer(_build_connect_app(), name="connect")
     runtime_app.add_typer(service_app, name="service")
-    runtime_app.add_typer(state_app, name="state")
     runtime_app.add_typer(_build_package_app(), name="package")
     runtime_app.add_typer(_build_dev_app(), name="dev")
+    if current_role == "controller":
+        runtime_app.command("status")(status_command)
+        runtime_app.add_typer(_build_node_app(), name="node")
+        runtime_app.add_typer(_build_group_app(), name="group")
+        runtime_app.add_typer(_build_link_app(), name="link")
+        runtime_app.add_typer(inventory_app, name="inventory")
+        runtime_app.add_typer(state_app, name="state")
     return runtime_app
 
 

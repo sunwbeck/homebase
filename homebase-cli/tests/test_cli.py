@@ -207,6 +207,25 @@ def test_root_help_is_concise(monkeypatch) -> None:
     assert "Start with:" not in result.stdout
 
 
+def test_root_help_for_managed_hides_controller_only_commands(monkeypatch) -> None:
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        Path("settings.toml").write_text('role = "managed"\nnode_name = "app"\n', encoding="utf-8")
+        app = load_app(monkeypatch, "settings.toml")
+        result = runner.invoke(app, ["--help"], env={"HOMEBASE_SETTINGS_PATH": "settings.toml"})
+        assert result.exit_code == 0
+        assert "│ status" not in result.stdout
+        assert "│ node " not in result.stdout
+        assert "│ group" not in result.stdout
+        assert "│ link " not in result.stdout
+        assert "│ inventory" not in result.stdout
+        assert "│ state" not in result.stdout
+        assert "│ connect" in result.stdout
+        assert "│ service" in result.stdout
+        assert "│ package" in result.stdout
+        assert "│ role" in result.stdout
+
+
 def test_init_help_explains_role_and_name(monkeypatch) -> None:
     runner = CliRunner()
     app = load_app(monkeypatch)
@@ -251,6 +270,7 @@ def test_status_shows_local_node(monkeypatch) -> None:
         app = load_app(monkeypatch, "settings.toml")
         result = runner.invoke(app, ["init", "--role", "controller", "--name", "control"], env=env)
         assert result.exit_code == 0
+        app = load_app(monkeypatch, "settings.toml")
         status_result = runner.invoke(app, ["status"], env=env)
         assert status_result.exit_code == 0
         assert "Node status" in status_result.stdout
@@ -393,13 +413,28 @@ def test_connect_help_for_managed_shows_code_only(monkeypatch) -> None:
         assert "No such command 'scan'" in scan_result.output
 
 
+def test_role_help_for_managed_hides_list(monkeypatch) -> None:
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        Path("settings.toml").write_text('role = "managed"\nnode_name = "app"\n', encoding="utf-8")
+        app = load_app(monkeypatch, "settings.toml")
+        result = runner.invoke(app, ["role", "--help"], env={"HOMEBASE_SETTINGS_PATH": "settings.toml"})
+        assert result.exit_code == 0
+        assert "list" not in result.stdout
+        assert "show" in result.stdout
+        assert "edit" in result.stdout
+
+
 def test_inventory_help_shows_show_and_edit(monkeypatch) -> None:
     runner = CliRunner()
-    app = load_app(monkeypatch)
-    result = runner.invoke(app, ["inventory", "--help"])
-    assert result.exit_code == 0
-    assert "show" in result.stdout
-    assert "edit" in result.stdout
+    with runner.isolated_filesystem():
+        env = {"HOMEBASE_SETTINGS_PATH": "settings.toml"}
+        Path("settings.toml").write_text('role = "controller"\nnode_name = "control"\n', encoding="utf-8")
+        app = load_app(monkeypatch, "settings.toml")
+        result = runner.invoke(app, ["inventory", "--help"], env=env)
+        assert result.exit_code == 0
+        assert "show" in result.stdout
+        assert "edit" in result.stdout
 
 
 def test_dev_self_test_prints_success(monkeypatch) -> None:
