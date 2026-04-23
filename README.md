@@ -56,6 +56,8 @@ Pairing flow:
 3. run `homebase node scan` on the control node
 4. run `homebase node add` on the control node and enter the code
 
+`homebase init` registers the current machine with a local node name as well as a node type.
+
 ## Package Commands
 
 `homebase package` is for checking installed revisions and installing or updating from GitHub.

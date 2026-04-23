@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import socket
 import sys
 from typing import Sequence
 
@@ -39,6 +40,7 @@ from homebase_cli.registry import (
     add_role_group,
     assign_node_role_group,
     child_nodes,
+    ensure_local_node,
     find_node,
     link_role_group,
     load_nodes,
@@ -67,6 +69,7 @@ from homebase_cli.selftest import run_client_self_test
 from homebase_cli.settings import (
     load_settings,
     runtime_roles,
+    set_node_name,
     set_role,
 )
 
@@ -206,6 +209,10 @@ def _require_role(*allowed: str) -> None:
 
 def _current_runtime_role() -> str | None:
     return load_settings().role
+
+
+def _current_node_name() -> str | None:
+    return load_settings().node_name
 
 
 def _choose_parent() -> str | None:
@@ -498,14 +505,25 @@ def client_serve_command(
 @app.command("init")
 def init_command(
     role: str | None = typer.Option(None, "--role", help="Optional node type to set directly: control or managed."),
+    name: str | None = typer.Option(None, "--name", help="Optional local node name to register directly."),
 ) -> None:
     """Initialize this installation as a control node or managed node."""
     selected = role.strip().lower() if role is not None else _choose_runtime_role()
+    selected_name = (name.strip() if name is not None else "") or typer.prompt("Node name", default=_current_node_name() or socket.gethostname())
     try:
         updated = set_role(selected)
+        previous_name = _current_node_name()
+        set_node_name(selected_name)
+        local_node = ensure_local_node(
+            selected_name,
+            updated.role or "managed",
+            runtime_hostname=socket.gethostname(),
+            previous_name=previous_name,
+        )
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
     console.print(f"[green]Set local node type to {updated.role}[/green]")
+    console.print(f"[green]Registered local node name:[/green] {local_node.name}")
 
 
 @role_app.command("status")
@@ -528,14 +546,26 @@ def role_status_command(resource: str | None = typer.Argument(None, help="Option
     console.print("[bold]Registered node roles[/bold]")
     nodes = load_nodes()
     if not nodes:
-        console.print("registered nodes: none")
+        current_name = _current_node_name()
+        current_role = _current_runtime_role()
+        if current_name and current_role:
+            table = Table(show_header=True, header_style="bold")
+            table.add_column("Node")
+            table.add_column("Type")
+            table.add_column("Groups")
+            table.add_row(f"{current_name} (local)", current_role, "")
+            console.print(table)
+        else:
+            console.print("registered nodes: none")
     else:
         table = Table(show_header=True, header_style="bold")
         table.add_column("Node")
         table.add_column("Type")
         table.add_column("Groups")
+        current_name = _current_node_name()
         for node in nodes:
-            table.add_row(node.name, node.runtime_role, ", ".join(node.role_groups) if node.role_groups else "")
+            label = f"{node.name} (local)" if current_name and node.name == current_name else node.name
+            table.add_row(label, node.runtime_role, ", ".join(node.role_groups) if node.role_groups else "")
         console.print(table)
     if not groups:
         console.print("defined groups: none")
@@ -601,6 +631,8 @@ def role_rename_command(
     _require_role("control")
     try:
         node = rename_node(resource, new_name)
+        if _current_node_name() == resource:
+            set_node_name(node.name)
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
     console.print(f"[green]Renamed node:[/green] {resource} -> {node.name}")

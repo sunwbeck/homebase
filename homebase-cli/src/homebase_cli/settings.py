@@ -17,6 +17,7 @@ class Settings:
     """Persistent local settings for one homebase installation."""
 
     role: str | None = None
+    node_name: str | None = None
     package_location: str | None = None
 
 
@@ -53,6 +54,7 @@ def load_settings(path: Path | None = None) -> Settings:
     payload = tomllib.loads(target.read_text(encoding="utf-8"))
     return Settings(
         role=_normalize_runtime_role(str(payload.get("role", "")) or None),
+        node_name=str(payload.get("node_name", "")).strip() or None,
         package_location=str(payload.get("package_location", "")).strip() or None,
     )
 
@@ -64,6 +66,8 @@ def save_settings(settings: Settings, path: Path | None = None) -> Path:
     lines = ["# homebase local settings", ""]
     if settings.role:
         lines.append(f'role = "{_escape(settings.role)}"')
+    if settings.node_name:
+        lines.append(f'node_name = "{_escape(settings.node_name)}"')
     if settings.package_location:
         lines.append(f'package_location = "{_escape(settings.package_location)}"')
     target.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
@@ -81,7 +85,7 @@ def set_role(role: str | None, path: Path | None = None) -> Settings:
     if normalized is not None and normalized not in RUNTIME_ROLES:
         raise ValueError(f"role must be one of: {', '.join(RUNTIME_ROLES)}")
     current = load_settings(path)
-    updated = Settings(role=normalized, package_location=current.package_location)
+    updated = Settings(role=normalized, node_name=current.node_name, package_location=current.package_location)
     save_settings(updated, path)
     return updated
 
@@ -89,6 +93,15 @@ def set_role(role: str | None, path: Path | None = None) -> Settings:
 def set_package_location(package_location: str | None, path: Path | None = None) -> Settings:
     """Update the stored package location."""
     current = load_settings(path)
-    updated = Settings(role=current.role, package_location=package_location)
+    updated = Settings(role=current.role, node_name=current.node_name, package_location=package_location)
+    save_settings(updated, path)
+    return updated
+
+
+def set_node_name(node_name: str | None, path: Path | None = None) -> Settings:
+    """Update the stored local node name."""
+    normalized = (node_name or "").strip() or None
+    current = load_settings(path)
+    updated = Settings(role=current.role, node_name=normalized, package_location=current.package_location)
     save_settings(updated, path)
     return updated

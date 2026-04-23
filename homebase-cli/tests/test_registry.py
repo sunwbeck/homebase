@@ -7,6 +7,7 @@ from homebase_cli.registry import (
     link_role_group,
     load_nodes,
     load_role_groups,
+    ensure_local_node,
     rename_node,
     set_node_runtime_role,
     set_node_state,
@@ -76,3 +77,14 @@ def test_rename_and_runtime_role_update_persist_in_registry(tmp_path: Path) -> N
     assert updated.runtime_role == "control"
     api_node = next(node for node in nodes if node.name == "host.api")
     assert api_node.runtime_role == "control"
+
+
+def test_ensure_local_node_creates_and_renames_local_entry(tmp_path: Path) -> None:
+    path = tmp_path / "nodes.toml"
+    created = ensure_local_node("control", "control", runtime_hostname="controlbox", path=path)
+    renamed = ensure_local_node("workstation", "managed", runtime_hostname="wsbox", previous_name="control", path=path)
+    nodes = load_nodes(path)
+    assert created.name == "control"
+    assert renamed.name == "workstation"
+    assert renamed.runtime_role == "managed"
+    assert next(node for node in nodes if node.name == "workstation").runtime_hostname == "wsbox"

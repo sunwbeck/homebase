@@ -106,9 +106,10 @@ def test_init_sets_role(monkeypatch) -> None:
     runner = CliRunner()
     with runner.isolated_filesystem():
         app = load_app(monkeypatch, "settings.toml")
-        result = runner.invoke(app, ["init", "--role", "control"], env={"HOMEBASE_SETTINGS_PATH": "settings.toml"})
+        result = runner.invoke(app, ["init", "--role", "control", "--name", "control"], env={"HOMEBASE_SETTINGS_PATH": "settings.toml"})
         assert result.exit_code == 0
         assert "Set local node type to control" in result.stdout
+        assert "Registered local node name: control" in result.stdout
 
 
 def test_init_rejects_unknown_role(monkeypatch) -> None:
@@ -128,10 +129,24 @@ def test_init_interactive_can_choose_managed(monkeypatch) -> None:
             app,
             ["init"],
             env={"HOMEBASE_SETTINGS_PATH": "settings.toml"},
-            input="2\n",
+            input="2\napp\n",
         )
         assert result.exit_code == 0
         assert "Set local node type to managed" in result.stdout
+        assert "Registered local node name: app" in result.stdout
+
+
+def test_init_registers_local_node_and_role_status_shows_it(monkeypatch) -> None:
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        env = {"HOMEBASE_SETTINGS_PATH": "settings.toml", "HOMEBASE_REGISTRY_PATH": "nodes.toml"}
+        app = load_app(monkeypatch, "settings.toml")
+        init_result = runner.invoke(app, ["init", "--role", "control", "--name", "control"], env=env)
+        assert init_result.exit_code == 0
+        status_result = runner.invoke(app, ["role", "status"], env=env)
+        assert status_result.exit_code == 0
+        assert "control (local)" in status_result.stdout
+        assert "control" in status_result.stdout
 
 
 def test_role_group_commands_build_hierarchy(monkeypatch) -> None:
@@ -172,6 +187,18 @@ def test_role_can_rename_node_and_set_type(monkeypatch) -> None:
         assert type_result.exit_code == 0
         status_result = runner.invoke(app, ["role", "status", "host.api"], env=env)
         assert "type: control" in status_result.stdout
+
+
+def test_role_rename_updates_local_node_name(monkeypatch) -> None:
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        env = {"HOMEBASE_SETTINGS_PATH": "settings.toml", "HOMEBASE_REGISTRY_PATH": "nodes.toml"}
+        Path("settings.toml").write_text('role = "control"\nnode_name = "host.app"\n', encoding="utf-8")
+        Path("nodes.toml").write_text('[[nodes]]\nname = "host.app"\nkind = "vm"\nruntime_role = "managed"\n', encoding="utf-8")
+        app = load_app(monkeypatch, "settings.toml")
+        result = runner.invoke(app, ["role", "rename", "host.app", "host.api"], env=env)
+        assert result.exit_code == 0
+        assert 'node_name = "host.api"' in Path("settings.toml").read_text(encoding="utf-8")
 
 
 def test_state_commands_store_values(monkeypatch) -> None:

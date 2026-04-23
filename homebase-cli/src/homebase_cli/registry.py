@@ -360,6 +360,63 @@ def set_node_runtime_role(name: str, runtime_role: str, path: Path | None = None
     return updated
 
 
+def ensure_local_node(
+    name: str,
+    runtime_role: str,
+    *,
+    runtime_hostname: str | None = None,
+    previous_name: str | None = None,
+    path: Path | None = None,
+) -> Node:
+    """Ensure the current local installation has one registry entry."""
+    normalized_name = name.strip()
+    if not normalized_name:
+        raise ValueError("node name cannot be empty")
+    nodes = load_nodes(path)
+    existing = next((node for node in nodes if node.name == normalized_name), None)
+    if existing is None and previous_name:
+        previous = next((node for node in nodes if node.name == previous_name.strip()), None)
+        if previous is not None:
+            existing = rename_node(previous.name, normalized_name, path=path)
+            nodes = load_nodes(path)
+    if existing is None:
+        kind = "control" if normalize_node_runtime_role(runtime_role) == "control" else "node"
+        return add_node(
+            name=normalized_name,
+            kind=kind,
+            runtime_role=runtime_role,
+            runtime_hostname=runtime_hostname,
+            path=path,
+        )
+    updated_nodes: list[Node] = []
+    updated: Node | None = None
+    for node in nodes:
+        if node.name != normalized_name:
+            updated_nodes.append(node)
+            continue
+        updated = Node(
+            name=node.name,
+            parent=node.parent,
+            kind="control" if normalize_node_runtime_role(runtime_role) == "control" else node.kind,
+            runtime_role=normalize_node_runtime_role(runtime_role, kind=node.kind),
+            address=node.address,
+            ssh_user=node.ssh_user,
+            description=node.description,
+            runtime_hostname=runtime_hostname or node.runtime_hostname,
+            node_id=node.node_id,
+            platform=node.platform,
+            client_port=node.client_port,
+            open_ports=node.open_ports,
+            services=node.services,
+            role_groups=node.role_groups,
+            states=node.states,
+        )
+        updated_nodes.append(updated)
+    save_nodes(tuple(updated_nodes), path)
+    assert updated is not None
+    return updated
+
+
 def add_role_group(
     *,
     name: str,
