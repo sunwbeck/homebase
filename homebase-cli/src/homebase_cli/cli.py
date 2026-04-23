@@ -249,7 +249,7 @@ def _service_rows(snapshot: dict[str, object]) -> list[dict[str, object]]:
         rows.append(
             {
                 "name": purpose,
-                "state": "running",
+                "state": "listening",
                 "pid": None,
                 "kind": "endpoint",
                 "description": owner or "",
@@ -257,6 +257,33 @@ def _service_rows(snapshot: dict[str, object]) -> list[dict[str, object]]:
             }
         )
     return rows
+
+
+def _service_row_matches_terms(
+    node,
+    snapshot: dict[str, object],
+    row: dict[str, object],
+    terms: Sequence[str],
+) -> bool:
+    """Return whether one service row matches all query terms."""
+    ports = [str(port) for port, _, _ in tuple(row["endpoints"])]
+    fields = [
+        node.name,
+        str(snapshot["address"] or ""),
+        str(snapshot["hostname"] or ""),
+        str(row["name"] or ""),
+        str(row["state"] or ""),
+        str(row["description"] or ""),
+        *ports,
+    ]
+    lowered_fields = [field.lower() for field in fields if field]
+    for term in terms:
+        normalized = term.strip().lower()
+        if not normalized:
+            continue
+        if not any(normalized in field for field in lowered_fields):
+            return False
+    return True
 
 
 def _node_runtime_snapshot(node):
@@ -1339,20 +1366,21 @@ def service_show_command(
 
 @service_app.command("search")
 def service_search_command(
-    query: str = typer.Argument(..., help="Service name fragment or port number."),
+    terms: list[str] = typer.Argument(..., help="Search terms such as node, service, state, address, or port."),
 ) -> None:
-    """Search services or exposed ports across nodes."""
+    """Search services across nodes with one or more filter terms.
+
+    Terms are combined with AND matching, in any order.
+    """
     current_role = _current_runtime_role()
-    nodes = [_current_node_name() or socket.gethostname()] if current_role == "managed" else []
     table = Table(show_header=True, header_style="bold")
     table.add_column("Node")
     table.add_column("Address")
     table.add_column("Service")
     table.add_column("State")
     table.add_column("PID")
-    table.add_column("Exposure")
-    query_text = query.strip().lower()
-    query_port = int(query_text) if query_text.isdigit() else None
+    table.add_column("Ports")
+    table.add_column("Description", overflow="fold")
     candidates = []
     if current_role == "managed":
         local_name = _current_node_name() or socket.gethostname()
@@ -1365,11 +1393,7 @@ def service_search_command(
     for node in candidates:
         snapshot = _node_runtime_snapshot(node)
         for row in _service_rows(snapshot):
-            exposure_text = _format_exposure_summary(tuple(row["endpoints"]))
-            matched = query_text in str(row["name"]).lower() or query_text in str(row["description"]).lower()
-            if query_port is not None and any(port == query_port for port, _, _ in tuple(row["endpoints"])):
-                matched = True
-            if not matched:
+            if not _service_row_matches_terms(node, snapshot, row, terms):
                 continue
             table.add_row(
                 _node_label(node.name),
@@ -1377,7 +1401,8 @@ def service_search_command(
                 str(row["name"]),
                 str(row["state"]),
                 str(row["pid"] or ""),
-                exposure_text,
+                _format_endpoint_ports(tuple(row["endpoints"])),
+                str(row["description"] or ""),
             )
             rows += 1
     if rows == 0:

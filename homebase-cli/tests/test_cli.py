@@ -520,7 +520,7 @@ def test_service_show_uses_runtime_address(monkeypatch) -> None:
         assert "999" in result.stdout
 
 
-def test_service_search_matches_name_and_port(monkeypatch) -> None:
+def test_service_search_matches_multiple_terms(monkeypatch) -> None:
     runner = CliRunner()
     with runner.isolated_filesystem():
         env = {"HOMEBASE_SETTINGS_PATH": "settings.toml", "HOMEBASE_REGISTRY_PATH": "nodes.toml", "COLUMNS": "240"}
@@ -546,9 +546,10 @@ def test_service_search_matches_name_and_port(monkeypatch) -> None:
         result = runner.invoke(app, ["service", "search", "graf"], env=env)
         assert result.exit_code == 0
         assert "grafana" in result.stdout
-        result = runner.invoke(app, ["service", "search", "3000"], env=env)
+        result = runner.invoke(app, ["service", "search", "app", "running", "3000"], env=env)
         assert result.exit_code == 0
         assert "3000" in result.stdout
+        assert "running" in result.stdout
 
 
 def test_service_start_requests_remote_action(monkeypatch) -> None:
