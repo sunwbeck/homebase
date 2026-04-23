@@ -20,6 +20,22 @@ run_privileged() {
   return 127
 }
 
+ensure_user_bin_path() {
+  local path_line
+  local target
+  path_line='export PATH="$HOME/.local/bin:$PATH"'
+
+  for target in "${HOME}/.profile" "${HOME}/.bashrc"; do
+    if [[ ! -f "${target}" ]]; then
+      printf '%s\n' "${path_line}" > "${target}"
+      continue
+    fi
+    if ! grep -Fq "${path_line}" "${target}"; then
+      printf '\n%s\n' "${path_line}" >> "${target}"
+    fi
+  done
+}
+
 install_venv_support() {
   if ! command -v apt-get >/dev/null 2>&1; then
     return 1
@@ -150,9 +166,11 @@ echo "Installing homebase from ${repo_url}@${git_ref}"
 if [[ -z "${VIRTUAL_ENV:-}" ]]; then
   ln -sfn "${managed_venv}/bin/hb" "${HOME}/.local/bin/hb"
   ln -sfn "${managed_venv}/bin/homebase" "${HOME}/.local/bin/homebase"
+  ensure_user_bin_path
   if [[ ":${PATH}:" != *":${HOME}/.local/bin:"* ]]; then
     echo
-    echo "Install finished. Add ${HOME}/.local/bin to PATH if hb is not found:"
+    echo "Install finished. Added ${HOME}/.local/bin to ~/.profile and ~/.bashrc."
+    echo "Current shell still needs one manual refresh:"
     echo "  export PATH=\"\$HOME/.local/bin:\$PATH\""
   fi
 fi
