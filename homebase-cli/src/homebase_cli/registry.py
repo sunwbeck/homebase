@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 import os
 from pathlib import Path
 import tomllib
@@ -190,65 +191,66 @@ def load_role_groups(path: Path | None = None) -> tuple[RoleGroup, ...]:
 
 def _save_registry(nodes: tuple[Node, ...], role_groups: tuple[RoleGroup, ...], path: Path | None = None) -> None:
     """Persist the full registry as TOML."""
+    def _toml_string(value: str) -> str:
+        return json.dumps(value)
+
     path = registry_path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     lines = ["# homebase node registry", ""]
     for node in nodes:
         lines.append("[[nodes]]")
-        lines.append(f'name = "{node.name}"')
+        lines.append(f"name = {_toml_string(node.name)}")
         if node.parent is not None:
-            lines.append(f'parent = "{node.parent}"')
-        lines.append(f'kind = "{node.kind}"')
-        lines.append(f'runtime_role = "{node.runtime_role}"')
+            lines.append(f"parent = {_toml_string(node.parent)}")
+        lines.append(f"kind = {_toml_string(node.kind)}")
+        lines.append(f"runtime_role = {_toml_string(node.runtime_role)}")
         if node.address is not None:
-            lines.append(f'address = "{node.address}"')
+            lines.append(f"address = {_toml_string(node.address)}")
         if node.ssh_user is not None:
-            lines.append(f'ssh_user = "{node.ssh_user}"')
+            lines.append(f"ssh_user = {_toml_string(node.ssh_user)}")
         if node.description:
-            escaped = node.description.replace("\\", "\\\\").replace('"', '\\"')
-            lines.append(f'description = "{escaped}"')
+            lines.append(f"description = {_toml_string(node.description)}")
         if node.runtime_hostname is not None:
-            lines.append(f'runtime_hostname = "{node.runtime_hostname}"')
+            lines.append(f"runtime_hostname = {_toml_string(node.runtime_hostname)}")
         if node.node_id is not None:
-            lines.append(f'node_id = "{node.node_id}"')
+            lines.append(f"node_id = {_toml_string(node.node_id)}")
         if node.platform is not None:
-            lines.append(f'platform = "{node.platform}"')
+            lines.append(f"platform = {_toml_string(node.platform)}")
         if node.client_port is not None:
             lines.append(f"client_port = {node.client_port}")
         if node.open_ports:
             port_values = ", ".join(str(port) for port in node.open_ports)
             lines.append(f"open_ports = [{port_values}]")
         if node.services:
-            service_values = ", ".join(f'"{service}"' for service in node.services)
+            service_values = ", ".join(_toml_string(service) for service in node.services)
             lines.append(f"services = [{service_values}]")
         if node.exposed_endpoints:
             endpoint_values = ", ".join(
-                f'"{port}|{purpose}|{owner or ""}"' for port, purpose, owner in node.exposed_endpoints
+                _toml_string(f"{port}|{purpose}|{owner or ''}") for port, purpose, owner in node.exposed_endpoints
             )
             lines.append(f"exposed_endpoints = [{endpoint_values}]")
         if node.endpoint_records:
             endpoint_record_values = ", ".join(
-                f'"{port}|{purpose}|{owner or ""}|{pid or ""}"' for port, purpose, owner, pid in node.endpoint_records
+                _toml_string(f"{port}|{purpose}|{owner or ''}|{pid or ''}") for port, purpose, owner, pid in node.endpoint_records
             )
             lines.append(f"endpoint_records = [{endpoint_record_values}]")
         if node.service_records:
             service_values = ", ".join(
-                f'"{name}|{state}|{pid or ""}|{kind}|{description}"'
+                _toml_string(f"{name}|{state}|{pid or ''}|{kind}|{description}")
                 for name, state, pid, kind, description in node.service_records
             )
             lines.append(f"service_records = [{service_values}]")
         if node.role_groups:
-            group_values = ", ".join(f'"{group}"' for group in node.role_groups)
+            group_values = ", ".join(_toml_string(group) for group in node.role_groups)
             lines.append(f"role_groups = [{group_values}]")
         lines.append("")
     for group in role_groups:
         lines.append("[[role_groups]]")
-        lines.append(f'name = "{group.name}"')
+        lines.append(f"name = {_toml_string(group.name)}")
         if group.description:
-            escaped_description = group.description.replace("\\", "\\\\").replace('"', '\\"')
-            lines.append(f'description = "{escaped_description}"')
+            lines.append(f"description = {_toml_string(group.description)}")
         if group.members:
-            member_values = ", ".join(f'"{member}"' for member in group.members)
+            member_values = ", ".join(_toml_string(member) for member in group.members)
             lines.append(f"members = [{member_values}]")
         else:
             lines.append("members = []")

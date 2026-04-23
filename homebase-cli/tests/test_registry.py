@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from homebase_cli.registry import (
+    Node,
     add_node,
     add_role_group,
     assign_node_role_group,
@@ -9,6 +10,7 @@ from homebase_cli.registry import (
     load_role_groups,
     ensure_local_node,
     rename_node,
+    save_nodes,
     set_node_runtime_role,
 )
 
@@ -85,3 +87,19 @@ def test_ensure_local_node_creates_and_renames_local_entry(tmp_path: Path) -> No
     assert renamed.name == "workstation"
     assert renamed.runtime_role == "managed"
     assert next(node for node in nodes if node.name == "workstation").runtime_hostname == "wsbox"
+
+
+def test_save_nodes_escapes_service_record_backslashes(tmp_path: Path) -> None:
+    path = tmp_path / "nodes.toml"
+    save_nodes(
+        (
+            Node(
+                name="pve",
+                runtime_role="managed",
+                service_records=(("example", "dead", None, "systemd", r"systemd-fsck@dev-disk-by\x2duuid-test"),),
+            ),
+        ),
+        path=path,
+    )
+    loaded = load_nodes(path)
+    assert loaded[0].service_records[0][4] == r"systemd-fsck@dev-disk-by\x2duuid-test"
