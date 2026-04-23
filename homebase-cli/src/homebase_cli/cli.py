@@ -197,11 +197,17 @@ def _show_node_details(node_name: str) -> None:
     if node is None:
         raise typer.BadParameter(f"unknown node: {node_name}")
     console.print(f"[bold]Node: {node.name}[/bold]")
-    console.print(f"type: {node.runtime_role}")
+    console.print(f"role: {node.runtime_role}")
     console.print(f"groups: {', '.join(node.role_groups) if node.role_groups else 'none'}")
     if node.parent:
         console.print(f"parent: {node.parent}")
-    console.print(f"kind: {node.kind}")
+    console.print(f"class: {node.kind}")
+    if node.address:
+        console.print(f"address: {node.address}")
+    if node.runtime_hostname:
+        console.print(f"hostname: {node.runtime_hostname}")
+    if node.platform:
+        console.print(f"platform: {node.platform}")
 
 
 def _show_group_details(group_name: str) -> None:
@@ -217,18 +223,18 @@ def _show_group_details(group_name: str) -> None:
 
 def _print_registered_overview() -> None:
     nodes = load_nodes()
-    groups = load_role_groups()
     console.print("[bold]Registered nodes[/bold]")
     table = Table(show_header=True, header_style="bold")
     table.add_column("Node")
-    table.add_column("Type")
-    table.add_column("Kind")
+    table.add_column("Role")
     table.add_column("Address")
+    table.add_column("Hostname")
+    table.add_column("Platform")
     table.add_column("Groups")
     current_name = _current_node_name()
     if not nodes:
         if current_name and _current_runtime_role():
-            table.add_row(f"{current_name} (local)", _current_runtime_role() or "", "control" if (_current_runtime_role() == "control") else "node", "", "")
+            table.add_row(f"{current_name} (local)", _current_runtime_role() or "", "", socket.gethostname(), "", "")
             console.print(table)
         else:
             console.print("registered nodes: none")
@@ -238,23 +244,12 @@ def _print_registered_overview() -> None:
             table.add_row(
                 label,
                 node.runtime_role,
-                node.kind,
                 node.address or "",
+                node.runtime_hostname or "",
+                node.platform or "",
                 ", ".join(node.role_groups) if node.role_groups else "",
             )
         console.print(table)
-
-    console.print("\n[bold]Defined groups[/bold]")
-    if not groups:
-        console.print("defined groups: none")
-        return
-    group_table = Table(show_header=True, header_style="bold")
-    group_table.add_column("Group")
-    group_table.add_column("Members")
-    group_table.add_column("Description")
-    for group in groups:
-        group_table.add_row(group.name, ", ".join(group.members) if group.members else "", group.description)
-    console.print(group_table)
 
 
 def _print_local_role() -> None:
@@ -292,14 +287,10 @@ def _render_group_tree(name: str, index: dict[str, object], rows: list[tuple[str
 
 @inventory_app.callback()
 def inventory_callback(ctx: typer.Context) -> None:
-    """Show the ansible inventory YAML when inventory is called directly."""
+    """Show help when inventory is called without a subcommand."""
     if ctx.invoked_subcommand is not None:
         return
-    _require_role("control")
-    target = write_ansible_inventory()
-    console.print(f"[green]Inventory YAML:[/green] {target}")
-    console.print(target.read_text(encoding="utf-8"))
-    raise typer.Exit(code=0)
+    _show_group_help(ctx)
 
 
 @connect_app.callback()
@@ -1337,6 +1328,8 @@ def _build_connect_app() -> typer.Typer:
     runtime_connect_app.callback()(connect_callback)
     runtime_connect_app.command("scan")(node_scan_command)
     runtime_connect_app.command("add")(node_add_command)
+    runtime_connect_app.command("code")(client_code_command)
+    runtime_connect_app.command("serve")(client_serve_command)
     return runtime_connect_app
 
 
