@@ -7,6 +7,8 @@ from homebase_cli.registry import (
     link_role_group,
     load_nodes,
     load_role_groups,
+    rename_node,
+    set_node_runtime_role,
     set_node_state,
 )
 
@@ -30,6 +32,7 @@ def test_add_node_persists_to_registry(tmp_path: Path) -> None:
     assert nodes[0].name == "control"
     assert nodes[0].runtime_hostname == "controlpi"
     assert nodes[0].node_id == "abc123"
+    assert nodes[0].runtime_role == "control"
     assert nodes[0].open_ports == (22, 8080)
     assert nodes[0].services == ("ssh", "docker")
 
@@ -60,3 +63,16 @@ def test_role_groups_and_node_state_persist_in_registry(tmp_path: Path) -> None:
     app_node = next(node for node in nodes if node.name == "host.app")
     assert app_node.role_groups == ("app-tier",)
     assert dict(app_node.states) == {"status": "active"}
+
+
+def test_rename_and_runtime_role_update_persist_in_registry(tmp_path: Path) -> None:
+    path = tmp_path / "nodes.toml"
+    add_node(name="host", kind="host", path=path)
+    add_node(name="host.app", parent="host", kind="vm", path=path)
+    renamed = rename_node("host.app", "host.api", path=path)
+    updated = set_node_runtime_role("host.api", "control", path=path)
+    nodes = load_nodes(path)
+    assert renamed.name == "host.api"
+    assert updated.runtime_role == "control"
+    api_node = next(node for node in nodes if node.name == "host.api")
+    assert api_node.runtime_role == "control"

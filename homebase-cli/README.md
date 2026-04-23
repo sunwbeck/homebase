@@ -29,10 +29,12 @@ homebase client serve
 Control side:
 
 ```bash
+homebase role status
 homebase node scan
 homebase node add
 homebase role group-add app-tier
 homebase role assign host.app app-tier
+homebase role set-type host.app managed
 homebase state set host.app status active
 homebase package status host.app
 homebase package install host.app --ref v0.1.1

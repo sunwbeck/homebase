@@ -83,12 +83,14 @@ What they do:
 `homebase role` defines reusable groups and assigns registered nodes to them.
 
 ```bash
+homebase role status
 homebase role group-add host-node
 homebase role group-add app-tier
 homebase role group-link host-node app-tier
 homebase role assign host.app app-tier
-homebase role status
 homebase role status host.app
+homebase role set-type host.app managed
+homebase role rename host.app host.api
 ```
 
 `homebase state` stores simple key/value labels on registered nodes.

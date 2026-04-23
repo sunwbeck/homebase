@@ -11,6 +11,7 @@ from homebase_cli.paths import LOCAL_CLI_ROOT
 
 
 DEFAULT_REGISTRY_PATH = LOCAL_CLI_ROOT / "config" / "nodes.toml"
+NODE_RUNTIME_ROLES = ("control", "managed")
 
 
 @dataclass(frozen=True)
@@ -20,6 +21,7 @@ class Node:
     name: str
     parent: str | None = None
     kind: str = "node"
+    runtime_role: str = "managed"
     address: str | None = None
     ssh_user: str | None = None
     description: str = ""
@@ -47,6 +49,19 @@ class RoleGroup:
     members: tuple[str, ...] = ()
 
 
+def normalize_node_runtime_role(value: str | None, *, kind: str | None = None) -> str:
+    """Normalize one node runtime role from saved data or kind."""
+    normalized = (value or "").strip().lower()
+    if normalized == "client":
+        normalized = "managed"
+    if normalized in NODE_RUNTIME_ROLES:
+        return normalized
+    inferred_kind = (kind or "").strip().lower()
+    if inferred_kind == "control":
+        return "control"
+    return "managed"
+
+
 def registry_path(path: Path | None = None) -> Path:
     """Resolve the active registry path."""
     if path is not None:
@@ -72,6 +87,10 @@ def load_nodes(path: Path | None = None) -> tuple[Node, ...]:
                 name=str(values["name"]),
                 parent=str(values["parent"]) if "parent" in values else None,
                 kind=str(values.get("kind", "node")),
+                runtime_role=normalize_node_runtime_role(
+                    str(values.get("runtime_role", "")).strip() or None,
+                    kind=str(values.get("kind", "node")),
+                ),
                 address=str(values["address"]) if "address" in values else None,
                 ssh_user=str(values["ssh_user"]) if "ssh_user" in values else None,
                 description=str(values.get("description", "")),
@@ -126,6 +145,7 @@ def _save_registry(nodes: tuple[Node, ...], role_groups: tuple[RoleGroup, ...], 
         if node.parent is not None:
             lines.append(f'parent = "{node.parent}"')
         lines.append(f'kind = "{node.kind}"')
+        lines.append(f'runtime_role = "{node.runtime_role}"')
         if node.address is not None:
             lines.append(f'address = "{node.address}"')
         if node.ssh_user is not None:
@@ -203,6 +223,7 @@ def add_node(
     address: str | None = None,
     ssh_user: str | None = None,
     description: str = "",
+    runtime_role: str | None = None,
     runtime_hostname: str | None = None,
     node_id: str | None = None,
     platform: str | None = None,
@@ -226,6 +247,7 @@ def add_node(
         name=normalized_name,
         parent=normalized_parent,
         kind=kind.strip() or "node",
+        runtime_role=normalize_node_runtime_role(runtime_role, kind=kind),
         address=address.strip() if address else None,
         ssh_user=ssh_user.strip() if ssh_user else None,
         description=description.strip(),
@@ -240,6 +262,102 @@ def add_node(
     )
     save_nodes(existing_nodes + (node,), path=path)
     return node
+
+
+def rename_node(name: str, new_name: str, path: Path | None = None) -> Node:
+    """Rename one node and update any direct children that point to it."""
+    normalized_name = name.strip()
+    normalized_new_name = new_name.strip()
+    if not normalized_new_name:
+        raise ValueError("new node name cannot be empty")
+    nodes = load_nodes(path)
+    current = next((node for node in nodes if node.name == normalized_name), None)
+    if current is None:
+        raise ValueError(f"unknown node: {normalized_name}")
+    if normalized_new_name != normalized_name and any(node.name == normalized_new_name for node in nodes):
+        raise ValueError(f"node already exists: {normalized_new_name}")
+    updated_nodes: list[Node] = []
+    renamed: Node | None = None
+    for node in nodes:
+        if node.name == normalized_name:
+            renamed = Node(
+                name=normalized_new_name,
+                parent=node.parent,
+                kind=node.kind,
+                runtime_role=node.runtime_role,
+                address=node.address,
+                ssh_user=node.ssh_user,
+                description=node.description,
+                runtime_hostname=node.runtime_hostname,
+                node_id=node.node_id,
+                platform=node.platform,
+                client_port=node.client_port,
+                open_ports=node.open_ports,
+                services=node.services,
+                role_groups=node.role_groups,
+                states=node.states,
+            )
+            updated_nodes.append(renamed)
+            continue
+        updated_nodes.append(
+            Node(
+                name=node.name,
+                parent=normalized_new_name if node.parent == normalized_name else node.parent,
+                kind=node.kind,
+                runtime_role=node.runtime_role,
+                address=node.address,
+                ssh_user=node.ssh_user,
+                description=node.description,
+                runtime_hostname=node.runtime_hostname,
+                node_id=node.node_id,
+                platform=node.platform,
+                client_port=node.client_port,
+                open_ports=node.open_ports,
+                services=node.services,
+                role_groups=node.role_groups,
+                states=node.states,
+            )
+        )
+    save_nodes(tuple(updated_nodes), path)
+    assert renamed is not None
+    return renamed
+
+
+def set_node_runtime_role(name: str, runtime_role: str, path: Path | None = None) -> Node:
+    """Set one node runtime role to control or managed."""
+    normalized_name = name.strip()
+    normalized_runtime_role = normalize_node_runtime_role(runtime_role)
+    nodes = load_nodes(path)
+    current = next((node for node in nodes if node.name == normalized_name), None)
+    if current is None:
+        raise ValueError(f"unknown node: {normalized_name}")
+    updated_nodes: list[Node] = []
+    updated: Node | None = None
+    for node in nodes:
+        if node.name != normalized_name:
+            updated_nodes.append(node)
+            continue
+        updated = Node(
+            name=node.name,
+            parent=node.parent,
+            kind=node.kind,
+            runtime_role=normalized_runtime_role,
+            address=node.address,
+            ssh_user=node.ssh_user,
+            description=node.description,
+            runtime_hostname=node.runtime_hostname,
+            node_id=node.node_id,
+            platform=node.platform,
+            client_port=node.client_port,
+            open_ports=node.open_ports,
+            services=node.services,
+            role_groups=node.role_groups,
+            states=node.states,
+        )
+        updated_nodes.append(updated)
+    save_nodes(tuple(updated_nodes), path)
+    assert updated is not None
+    return updated
 
 
 def add_role_group(

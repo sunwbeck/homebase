@@ -43,7 +43,9 @@ from homebase_cli.registry import (
     link_role_group,
     load_nodes,
     load_role_groups,
+    rename_node,
     remove_role_group,
+    set_node_runtime_role,
     set_node_state,
     unassign_node_role_group,
     unlink_role_group,
@@ -73,7 +75,7 @@ app = typer.Typer(no_args_is_help=True, help="Manage homebase control and client
 node_app = typer.Typer(help="Scan for clients and inspect registered nodes.")
 ansible_app = typer.Typer(help="Run ansible-related helper commands.")
 client_app = typer.Typer(help="Run the homebase client service on one managed node.")
-role_app = typer.Typer(invoke_without_command=True, help="Define node groups and assign registered nodes to them.")
+role_app = typer.Typer(invoke_without_command=True, help="Inspect and manage registered node type and group assignments.")
 state_app = typer.Typer(invoke_without_command=True, help="Store and inspect saved state values for registered nodes.")
 package_app = typer.Typer(
     invoke_without_command=True,
@@ -508,21 +510,33 @@ def init_command(
 
 @role_app.command("status")
 def role_status_command(resource: str | None = typer.Argument(None, help="Optional resource path such as host.app.")) -> None:
-    """Show saved role groups and one node's current group assignments."""
+    """Show registered node type and group assignments."""
     _require_role("control")
     groups = load_role_groups()
     if resource is not None:
         node = find_node(resource)
         if node is None:
             raise typer.BadParameter(f"unknown node: {resource}")
-        console.print(f"[bold]Role assignments: {node.name}[/bold]")
-        if node.role_groups:
-            for name in node.role_groups:
-                console.print(f"- {name}")
-        else:
-            console.print("none")
+        console.print(f"[bold]Node role status: {node.name}[/bold]")
+        console.print(f"type: {node.runtime_role}")
+        console.print(f"groups: {', '.join(node.role_groups) if node.role_groups else 'none'}")
+        if node.parent:
+            console.print(f"parent: {node.parent}")
+        console.print(f"kind: {node.kind}")
+        return
+
+    console.print("[bold]Registered node roles[/bold]")
+    nodes = load_nodes()
+    if not nodes:
+        console.print("registered nodes: none")
     else:
-        console.print("[bold]Role group tree[/bold]")
+        table = Table(show_header=True, header_style="bold")
+        table.add_column("Node")
+        table.add_column("Type")
+        table.add_column("Groups")
+        for node in nodes:
+            table.add_row(node.name, node.runtime_role, ", ".join(node.role_groups) if node.role_groups else "")
+        console.print(table)
     if not groups:
         console.print("defined groups: none")
         return
@@ -534,6 +548,62 @@ def role_status_command(resource: str | None = typer.Argument(None, help="Option
         rows = [(group.name, "group") for group in groups]
     console.print("group tree:")
     print_node_tree(rows)
+
+
+@role_app.command("assign")
+def role_assign_command(
+    resource: str = typer.Argument(..., help="Resource path such as host.app."),
+    name: str = typer.Argument(..., help="Group name."),
+) -> None:
+    """Assign one registered node to one role group."""
+    _require_role("control")
+    try:
+        assign_node_role_group(resource, name)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    console.print(f"[green]Assigned node:[/green] {resource} -> {name.strip().lower()}")
+
+
+@role_app.command("unassign")
+def role_unassign_command(
+    resource: str = typer.Argument(..., help="Resource path such as host.app."),
+    name: str = typer.Argument(..., help="Group name."),
+) -> None:
+    """Remove one role-group assignment from one registered node."""
+    _require_role("control")
+    try:
+        unassign_node_role_group(resource, name)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    console.print(f"[green]Removed node assignment:[/green] {resource} from {name.strip().lower()}")
+
+
+@role_app.command("set-type")
+def role_set_type_command(
+    resource: str = typer.Argument(..., help="Resource path such as host.app."),
+    runtime_role: str = typer.Argument(..., help="control or managed."),
+) -> None:
+    """Set one registered node type to control or managed."""
+    _require_role("control")
+    try:
+        node = set_node_runtime_role(resource, runtime_role)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    console.print(f"[green]Set node type:[/green] {node.name} -> {node.runtime_role}")
+
+
+@role_app.command("rename")
+def role_rename_command(
+    resource: str = typer.Argument(..., help="Current resource path such as host.app."),
+    new_name: str = typer.Argument(..., help="New resource path."),
+) -> None:
+    """Rename one registered node."""
+    _require_role("control")
+    try:
+        node = rename_node(resource, new_name)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    console.print(f"[green]Renamed node:[/green] {resource} -> {node.name}")
 
 
 @role_app.command("list")
@@ -608,34 +678,6 @@ def role_group_unlink_command(
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
     console.print(f"[green]Unlinked group:[/green] {child.strip().lower()} from {parent.strip().lower()}")
-
-
-@role_app.command("assign")
-def role_assign_command(
-    resource: str = typer.Argument(..., help="Resource path such as host.app."),
-    name: str = typer.Argument(..., help="Group name."),
-) -> None:
-    """Assign one registered node to one role group."""
-    _require_role("control")
-    try:
-        assign_node_role_group(resource, name)
-    except ValueError as exc:
-        raise typer.BadParameter(str(exc)) from exc
-    console.print(f"[green]Assigned node:[/green] {resource} -> {name.strip().lower()}")
-
-
-@role_app.command("unassign")
-def role_unassign_command(
-    resource: str = typer.Argument(..., help="Resource path such as host.app."),
-    name: str = typer.Argument(..., help="Group name."),
-) -> None:
-    """Remove one role-group assignment from one registered node."""
-    _require_role("control")
-    try:
-        unassign_node_role_group(resource, name)
-    except ValueError as exc:
-        raise typer.BadParameter(str(exc)) from exc
-    console.print(f"[green]Removed node assignment:[/green] {resource} from {name.strip().lower()}")
 
 
 @state_app.command("show")

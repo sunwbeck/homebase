@@ -150,10 +150,28 @@ def test_role_group_commands_build_hierarchy(monkeypatch) -> None:
         assert runner.invoke(app, ["role", "assign", "host.app", "app-tier"], env=env).exit_code == 0
         status_result = runner.invoke(app, ["role", "status", "host.app"], env=env)
         assert status_result.exit_code == 0
+        assert "type: managed" in status_result.stdout
         assert "app-tier" in status_result.stdout
         tree_result = runner.invoke(app, ["role", "status"], env=env)
+        assert "Registered node roles" in tree_result.stdout
+        assert "managed" in tree_result.stdout
         assert "host-node" in tree_result.stdout
         assert "app-tier" in tree_result.stdout
+
+
+def test_role_can_rename_node_and_set_type(monkeypatch) -> None:
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        env = {"HOMEBASE_SETTINGS_PATH": "settings.toml", "HOMEBASE_REGISTRY_PATH": "nodes.toml"}
+        Path("settings.toml").write_text('role = "control"\n', encoding="utf-8")
+        Path("nodes.toml").write_text('[[nodes]]\nname = "host.app"\nkind = "vm"\nruntime_role = "managed"\n', encoding="utf-8")
+        app = load_app(monkeypatch, "settings.toml")
+        rename_result = runner.invoke(app, ["role", "rename", "host.app", "host.api"], env=env)
+        assert rename_result.exit_code == 0
+        type_result = runner.invoke(app, ["role", "set-type", "host.api", "control"], env=env)
+        assert type_result.exit_code == 0
+        status_result = runner.invoke(app, ["role", "status", "host.api"], env=env)
+        assert "type: control" in status_result.stdout
 
 
 def test_state_commands_store_values(monkeypatch) -> None:
@@ -442,6 +460,19 @@ def test_role_help_uses_group_management_workflow(monkeypatch) -> None:
     result = runner.invoke(app, ["role", "--help"])
     assert result.exit_code == 0
     output = result.stdout
+    command_lines = [line for line in output.splitlines() if line.strip().startswith(("│ status", "│ assign", "│ unassign", "│ set-type", "│ rename", "│ list", "│ group-add", "│ group-remove", "│ group-link", "│ group-unlink"))]
+    assert command_lines == [
+        "│ status         Show registered node type and group assignments.              │",
+        "│ assign         Assign one registered node to one role group.                 │",
+        "│ unassign       Remove one role-group assignment from one registered node.    │",
+        "│ set-type       Set one registered node type to control or managed.           │",
+        "│ rename         Rename one registered node.                                   │",
+        "│ list           List defined role groups.                                     │",
+        "│ group-add      Add one role group definition.                                │",
+        "│ group-remove   Remove one role group definition.                             │",
+        "│ group-link     Link one child group under one parent group.                  │",
+        "│ group-unlink   Remove one child group link from one parent group.            │",
+    ]
     assert "group-add" in output
     assert "group-remove" in output
     assert "group-link" in output
