@@ -190,6 +190,13 @@ def _format_exposure_summary(endpoints: Sequence[tuple[int, str, str | None]]) -
     return ", ".join(f"{purpose}:{port}" for port, purpose, _ in endpoints)
 
 
+def _format_endpoint_ports(endpoints: Sequence[tuple[int, str, str | None]]) -> str:
+    """Render exposed endpoints as a concise port list."""
+    if not endpoints:
+        return ""
+    return ", ".join(str(port) for port, _, _ in endpoints)
+
+
 def _format_endpoint_details(endpoints: Sequence[tuple[int, str, str | None]]) -> str:
     """Render endpoint details for one node view."""
     if not endpoints:
@@ -250,14 +257,6 @@ def _service_rows(snapshot: dict[str, object]) -> list[dict[str, object]]:
             }
         )
     return rows
-
-
-def _service_row_visible_in_list(row: dict[str, object]) -> bool:
-    """Return whether one service row belongs in the default list view."""
-    endpoints = tuple(row.get("endpoints") or ())
-    if endpoints:
-        return True
-    return False
 
 
 def _node_runtime_snapshot(node):
@@ -1211,11 +1210,7 @@ def service_list_command(
     resource: str | None = typer.Argument(None, help="Optional node name."),
     group: str | None = typer.Option(None, "--group", help="Optional group name."),
 ) -> None:
-    """List the currently relevant services across nodes.
-
-    This default view focuses on services that are currently running or exposed.
-    Use `homebase service show <node>` for the full service record list on one node.
-    """
+    """List service records across nodes, including state, pid, and exposed ports."""
     current_role = _current_runtime_role()
     if current_role == "managed":
         if resource is not None or group is not None:
@@ -1225,28 +1220,24 @@ def service_list_command(
         table = Table(show_header=True, header_style="bold")
         table.add_column("Node")
         table.add_column("Address")
-        table.add_column("Hostname")
         table.add_column("Service")
-        table.add_column("Kind")
         table.add_column("State")
         table.add_column("PID")
-        table.add_column("Exposure")
+        table.add_column("Ports")
         table.add_column("Description", overflow="fold")
         snapshot = _node_runtime_snapshot(local_node)
-        rows = [row for row in _service_rows(snapshot) if _service_row_visible_in_list(row)]
+        rows = _service_rows(snapshot)
         if not rows:
-            table.add_row(_node_label(local_node.name), snapshot["address"], snapshot["hostname"], "none", "", "", "", "", "")
+            table.add_row(_node_label(local_node.name), snapshot["address"], "none", "", "", "", "")
         else:
             for row in rows:
                 table.add_row(
                     _node_label(local_node.name),
                     snapshot["address"],
-                    snapshot["hostname"],
                     str(row["name"]),
-                    str(row["kind"]),
                     str(row["state"]),
                     str(row["pid"] or ""),
-                    _format_exposure_summary(tuple(row["endpoints"])),
+                    _format_endpoint_ports(tuple(row["endpoints"])),
                     str(row["description"] or ""),
                 )
         console.print(table)
@@ -1266,31 +1257,27 @@ def service_list_command(
     table = Table(show_header=True, header_style="bold")
     table.add_column("Node")
     table.add_column("Address")
-    table.add_column("Hostname")
     table.add_column("Service")
-    table.add_column("Kind")
     table.add_column("State")
     table.add_column("PID")
-    table.add_column("Exposure")
+    table.add_column("Ports")
     table.add_column("Description", overflow="fold")
     table.add_column("Groups")
     for node in nodes:
         snapshot = _node_runtime_snapshot(node)
-        rows = [row for row in _service_rows(snapshot) if _service_row_visible_in_list(row)]
+        rows = _service_rows(snapshot)
         groups_value = ", ".join(node.role_groups) if node.role_groups else ""
         if not rows:
-            table.add_row(_node_label(node.name), snapshot["address"], snapshot["hostname"], "none", "", "", "", "", "", groups_value)
+            table.add_row(_node_label(node.name), snapshot["address"], "none", "", "", "", "", groups_value)
             continue
         for row in rows:
             table.add_row(
                 _node_label(node.name),
                 snapshot["address"],
-                snapshot["hostname"],
                 str(row["name"]),
-                str(row["kind"]),
                 str(row["state"]),
                 str(row["pid"] or ""),
-                _format_exposure_summary(tuple(row["endpoints"])),
+                _format_endpoint_ports(tuple(row["endpoints"])),
                 str(row["description"] or ""),
                 groups_value,
             )

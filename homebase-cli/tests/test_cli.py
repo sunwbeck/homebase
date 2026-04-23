@@ -405,19 +405,19 @@ def test_service_list_shows_local_services(monkeypatch) -> None:
         result = runner.invoke(app, ["service", "list"], env=env)
         assert result.exit_code == 0
         assert "Service" in result.stdout
-        assert "Kind" in result.stdout
         assert "State" in result.stdout
         assert "PID" in result.stdout
-        assert "Exposure" in result.stdout
+        assert "Ports" in result.stdout
         assert "192.168.0.20" in result.stdout
         assert "ssh" in result.stdout
+        assert "docker" in result.stdout
         assert "running" in result.stdout
         assert "111" in result.stdout
-        assert "homebase:8428" in result.stdout
+        assert "8428" in result.stdout
         assert "OpenSSH server" in result.stdout
 
 
-def test_service_list_hides_non_running_records_by_default(monkeypatch) -> None:
+def test_service_list_shows_non_running_records(monkeypatch) -> None:
     runner = CliRunner()
     with runner.isolated_filesystem():
         env = {"HOMEBASE_SETTINGS_PATH": "settings.toml", "COLUMNS": "240"}
@@ -457,7 +457,8 @@ def test_service_list_hides_non_running_records_by_default(monkeypatch) -> None:
         result = runner.invoke(app, ["service", "list"], env=env)
         assert result.exit_code == 0
         assert "ssh" in result.stdout
-        assert "apt-daily" not in result.stdout
+        assert "apt-daily" in result.stdout
+        assert "dead" in result.stdout
 
 
 def test_service_list_marks_nodes_without_endpoints(monkeypatch) -> None:
