@@ -60,6 +60,7 @@ from homebase_cli.registry import (
     load_role_groups,
     rename_node,
     rename_role_group,
+    remove_node,
     remove_role_group,
     set_role_group_description,
     set_node_runtime_role,
@@ -576,6 +577,23 @@ def _choose_kind() -> str:
     return selected
 
 
+def _choose_registered_node(label: str = "Registered nodes") -> str:
+    nodes = _inventory_nodes()
+    if not nodes:
+        raise typer.BadParameter("no registered nodes available")
+    labels = [_node_label(node.name) for node in nodes]
+    selected = _pick_from_list(label, labels)
+    return nodes[labels.index(selected)].name
+
+
+def _choose_registered_group(label: str = "Groups") -> str:
+    groups = list(load_role_groups())
+    if not groups:
+        raise typer.BadParameter("no groups available")
+    selected = _pick_from_list(label, [group.name for group in groups])
+    return selected
+
+
 def _choose_discovered_node() -> DiscoveredNode:
     pending = list(unregistered_discovered_nodes())
     if not pending:
@@ -677,6 +695,25 @@ def node_add_command(
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
     console.print(f"[green]Registered node {node.name}[/green]")
+
+
+@connect_app.command("remove")
+def connect_remove_command(
+    node_name: str | None = typer.Argument(None, help="Registered node name to remove."),
+) -> None:
+    """Remove one registered node from the inventory.
+
+    This is the same removal action exposed under `homebase node remove`.
+    """
+    _require_role("controller")
+    selected_name = node_name or _choose_registered_node()
+    if selected_name == (_current_node_name() or ""):
+        raise typer.BadParameter("cannot remove the local controller node")
+    try:
+        removed = remove_node(selected_name)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    console.print(f"[green]Removed node:[/green] {removed.name}")
 
 
 @connect_app.command("status")
@@ -1099,7 +1136,6 @@ def role_show_command(target: str | None = typer.Argument(None, help="Optional n
 @role_app.command("list")
 def role_list_command() -> None:
     """List all registered nodes with their runtime roles."""
-    _require_role("controller")
     nodes = _inventory_nodes()
     if not nodes:
         console.print("registered nodes: none")
@@ -1123,29 +1159,21 @@ def role_list_command() -> None:
 
 @role_app.command("edit")
 def role_edit_command(
-    target_or_role: str | None = typer.Argument(None, help="Optional local role value, or a node name when editing a registered node."),
-    runtime_role: str | None = typer.Argument(None, help="Optional new role for the selected registered node."),
+    target: str | None = typer.Argument(None, help="Optional node name."),
+    runtime_role: str | None = typer.Argument(None, help="Optional new runtime role."),
 ) -> None:
-    """Edit the local runtime role, or the role of one registered node."""
-    if target_or_role is None:
-        _set_local_role(_choose_runtime_role())
-        return
-    if runtime_role is None:
-        if _current_runtime_role() == "controller":
-            node = find_node(target_or_role)
-            if node is not None:
-                selected_role = _choose_runtime_role()
-                try:
-                    updated = set_node_runtime_role(target_or_role, selected_role)
-                except ValueError as exc:
-                    raise typer.BadParameter(str(exc)) from exc
-                console.print(f"[green]Set node role:[/green] {updated.name} -> {updated.runtime_role}")
-                return
-        _set_local_role(target_or_role)
+    """Edit one node runtime role.
+
+    Without arguments, this lists registered nodes and lets you choose one first.
+    """
+    selected_target = target or _choose_registered_node()
+    selected_role = runtime_role or _choose_runtime_role()
+    if selected_target == (_current_node_name() or ""):
+        _set_local_role(selected_role)
         return
     _require_role("controller")
     try:
-        updated = set_node_runtime_role(target_or_role, runtime_role)
+        updated = set_node_runtime_role(selected_target, selected_role)
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
     console.print(f"[green]Set node role:[/green] {updated.name} -> {updated.runtime_role}")
@@ -1153,19 +1181,31 @@ def role_edit_command(
 
 @node_app.command("edit")
 def node_edit_command(
-    target: str = typer.Argument(..., help="Current node name."),
-    field: str = typer.Argument(..., help="Field to edit: name or role."),
-    value: str = typer.Argument(..., help="New value."),
+    target: str | None = typer.Argument(None, help="Optional current node name."),
+    field: str | None = typer.Argument(None, help="Optional field to edit: name or role."),
+    value: str | None = typer.Argument(None, help="Optional new value."),
 ) -> None:
-    """Edit one registered node."""
-    normalized = field.strip().lower()
+    """Edit one registered node.
+
+    Without arguments, this lists registered nodes and lets you choose the node,
+    field, and new value interactively.
+    """
+    _require_role("controller")
+    selected_target = target or _choose_registered_node()
+    selected_field = (field or _pick_from_list("Node field", ("name", "role"))).strip().lower()
+    selected_value = value
+    if selected_value is None:
+        if selected_field == "role":
+            selected_value = _choose_runtime_role()
+        else:
+            selected_value = typer.prompt("New node name").strip()
+    normalized = selected_field
     if normalized == "name":
-        _require_role("controller")
-        node = find_node(target)
+        node = find_node(selected_target)
         if node is None:
-            raise typer.BadParameter(f"unknown node: {target}")
+            raise typer.BadParameter(f"unknown node: {selected_target}")
         try:
-            renamed = rename_node(node.name, value)
+            renamed = rename_node(node.name, selected_value)
             if _current_node_name() == node.name:
                 set_node_name(renamed.name)
         except ValueError as exc:
@@ -1174,12 +1214,28 @@ def node_edit_command(
         return
     if normalized == "role":
         try:
-            updated = set_node_runtime_role(target, value)
+            updated = set_node_runtime_role(selected_target, selected_value)
         except ValueError as exc:
             raise typer.BadParameter(str(exc)) from exc
         console.print(f"[green]Set node type:[/green] {updated.name} -> {updated.runtime_role}")
         return
     raise typer.BadParameter("node edit field must be one of: name, role")
+
+
+@node_app.command("remove")
+def node_remove_command(
+    target: str | None = typer.Argument(None, help="Optional node name to remove."),
+) -> None:
+    """Remove one registered node from the inventory."""
+    _require_role("controller")
+    selected_target = target or _choose_registered_node()
+    if selected_target == (_current_node_name() or ""):
+        raise typer.BadParameter("cannot remove the local controller node")
+    try:
+        removed = remove_node(selected_target)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    console.print(f"[green]Removed node:[/green] {removed.name}")
 
 
 @group_app.command("list")
@@ -1227,20 +1283,27 @@ def group_add_command(group: str = typer.Argument(..., help="New group name.")) 
 
 @group_app.command("edit")
 def group_edit_command(
-    group: str = typer.Argument(..., help="Current group name."),
-    field: str = typer.Argument(..., help="Field to edit: name or description."),
-    value: str = typer.Argument(..., help="New value."),
+    group: str | None = typer.Argument(None, help="Optional current group name."),
+    field: str | None = typer.Argument(None, help="Optional field to edit: name or description."),
+    value: str | None = typer.Argument(None, help="Optional new value."),
 ) -> None:
-    """Edit one group."""
+    """Edit one group.
+
+    Without arguments, this lists groups and lets you choose the group, field,
+    and new value interactively.
+    """
     _require_role("controller")
-    normalized = field.strip().lower()
+    selected_group = group or _choose_registered_group()
+    selected_field = (field or _pick_from_list("Group field", ("name", "description"))).strip().lower()
+    selected_value = value or typer.prompt("New value").strip()
+    normalized = selected_field
     try:
         if normalized == "name":
-            updated = rename_role_group(group, value)
-            console.print(f"[green]Renamed group:[/green] {group} -> {updated.name}")
+            updated = rename_role_group(selected_group, selected_value)
+            console.print(f"[green]Renamed group:[/green] {selected_group} -> {updated.name}")
             return
         if normalized == "description":
-            updated = set_role_group_description(group, value)
+            updated = set_role_group_description(selected_group, selected_value)
             console.print(f"[green]Updated group description:[/green] {updated.name}")
             return
     except ValueError as exc:
@@ -1680,6 +1743,7 @@ def _build_node_app() -> typer.Typer:
     runtime_node_app.command("list")(node_list_command)
     runtime_node_app.command("show")(node_show_command)
     runtime_node_app.command("edit")(node_edit_command)
+    runtime_node_app.command("remove")(node_remove_command)
     runtime_node_app.command("assign")(node_assign_command)
     runtime_node_app.command("unassign")(node_unassign_command)
     return runtime_node_app
@@ -1692,6 +1756,7 @@ def _build_connect_app() -> typer.Typer:
     if current_role != "managed":
         runtime_connect_app.command("scan")(node_scan_command)
         runtime_connect_app.command("add")(node_add_command)
+        runtime_connect_app.command("remove")(connect_remove_command)
     if current_role != "controller":
         runtime_connect_app.command("code")(client_code_command)
     runtime_connect_app.command("status")(connect_status_command)
@@ -1724,8 +1789,7 @@ def _build_link_app() -> typer.Typer:
 def _build_role_app() -> typer.Typer:
     runtime_role_app = typer.Typer(invoke_without_command=True, help=role_app.info.help)
     runtime_role_app.callback()(role_callback)
-    if _current_runtime_role() == "controller":
-        runtime_role_app.command("list")(role_list_command)
+    runtime_role_app.command("list")(role_list_command)
     runtime_role_app.command("show")(role_show_command)
     runtime_role_app.command("edit")(role_edit_command)
     return runtime_role_app

@@ -127,21 +127,23 @@ def test_role_edit_without_args_prompts_for_local_role(monkeypatch) -> None:
         env = {"HOMEBASE_SETTINGS_PATH": "settings.toml"}
         Path("settings.toml").write_text('role = "managed"\nnode_name = "app"\n', encoding="utf-8")
         app = load_app(monkeypatch, "settings.toml")
-        monkeypatch.setattr("homebase_cli.cli._pick_from_list", lambda label, options: "controller")
+        picks = iter(["app (local)", "controller"])
+        monkeypatch.setattr("homebase_cli.cli._pick_from_list", lambda label, options: next(picks))
         result = runner.invoke(app, ["role", "edit"], env=env)
         assert result.exit_code == 0
         assert "Set local node type to controller" in result.stdout
 
 
-def test_role_edit_node_without_role_prompts_for_node_role(monkeypatch) -> None:
+def test_role_edit_without_args_prompts_for_node_and_role(monkeypatch) -> None:
     runner = CliRunner()
     with runner.isolated_filesystem():
         env = {"HOMEBASE_SETTINGS_PATH": "settings.toml", "HOMEBASE_REGISTRY_PATH": "nodes.toml"}
         Path("settings.toml").write_text('role = "controller"\nnode_name = "control"\n', encoding="utf-8")
         Path("nodes.toml").write_text('[[nodes]]\nname = "host.app"\nkind = "vm"\nruntime_role = "managed"\n', encoding="utf-8")
         app = load_app(monkeypatch, "settings.toml")
-        monkeypatch.setattr("homebase_cli.cli._pick_from_list", lambda label, options: "controller")
-        result = runner.invoke(app, ["role", "edit", "host.app"], env=env)
+        picks = iter(["host.app", "controller"])
+        monkeypatch.setattr("homebase_cli.cli._pick_from_list", lambda label, options: next(picks))
+        result = runner.invoke(app, ["role", "edit"], env=env)
         assert result.exit_code == 0
         assert "Set node role:" in result.stdout
         assert "host.app -> controller" in result.stdout
@@ -352,9 +354,53 @@ def test_node_edit_name_updates_local_node_name(monkeypatch) -> None:
         Path("settings.toml").write_text('role = "controller"\nnode_name = "host.app"\n', encoding="utf-8")
         Path("nodes.toml").write_text('[[nodes]]\nname = "host.app"\nkind = "vm"\nruntime_role = "managed"\n', encoding="utf-8")
         app = load_app(monkeypatch, "settings.toml")
-        result = runner.invoke(app, ["node", "edit", "host.app", "name", "host.api"], env=env)
+        picks = iter(["host.app (local)", "name"])
+        monkeypatch.setattr("homebase_cli.cli._pick_from_list", lambda label, options: next(picks))
+        result = runner.invoke(app, ["node", "edit"], env=env, input="host.api\n")
         assert result.exit_code == 0
         assert 'node_name = "host.api"' in Path("settings.toml").read_text(encoding="utf-8")
+
+
+def test_group_edit_without_args_prompts_for_group_and_field(monkeypatch) -> None:
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        env = {"HOMEBASE_SETTINGS_PATH": "settings.toml", "HOMEBASE_REGISTRY_PATH": "nodes.toml"}
+        Path("settings.toml").write_text('role = "controller"\nnode_name = "control"\n', encoding="utf-8")
+        app = load_app(monkeypatch, "settings.toml")
+        assert runner.invoke(app, ["group", "add", "app-tier"], env=env).exit_code == 0
+        picks = iter(["app-tier", "name"])
+        monkeypatch.setattr("homebase_cli.cli._pick_from_list", lambda label, options: next(picks))
+        result = runner.invoke(app, ["group", "edit"], env=env, input="app-services\n")
+        assert result.exit_code == 0
+        assert "Renamed group:" in result.stdout
+        assert "app-services" in result.stdout
+
+
+def test_node_remove_removes_registered_node(monkeypatch) -> None:
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        env = {"HOMEBASE_SETTINGS_PATH": "settings.toml", "HOMEBASE_REGISTRY_PATH": "nodes.toml"}
+        Path("settings.toml").write_text('role = "controller"\nnode_name = "control"\n', encoding="utf-8")
+        Path("nodes.toml").write_text('[[nodes]]\nname = "host.app"\nkind = "vm"\nruntime_role = "managed"\n', encoding="utf-8")
+        app = load_app(monkeypatch, "settings.toml")
+        monkeypatch.setattr("homebase_cli.cli._pick_from_list", lambda label, options: "host.app")
+        result = runner.invoke(app, ["node", "remove"], env=env)
+        assert result.exit_code == 0
+        assert "Removed node:" in result.stdout
+        assert "host.app" in result.stdout
+
+
+def test_connect_remove_matches_node_remove(monkeypatch) -> None:
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        env = {"HOMEBASE_SETTINGS_PATH": "settings.toml", "HOMEBASE_REGISTRY_PATH": "nodes.toml"}
+        Path("settings.toml").write_text('role = "controller"\nnode_name = "control"\n', encoding="utf-8")
+        Path("nodes.toml").write_text('[[nodes]]\nname = "host.app"\nkind = "vm"\nruntime_role = "managed"\n', encoding="utf-8")
+        app = load_app(monkeypatch, "settings.toml")
+        monkeypatch.setattr("homebase_cli.cli._pick_from_list", lambda label, options: "host.app")
+        result = runner.invoke(app, ["connect", "remove"], env=env)
+        assert result.exit_code == 0
+        assert "Removed node:" in result.stdout
 
 
 def test_group_and_link_commands_build_hierarchy(monkeypatch) -> None:
@@ -480,14 +526,14 @@ def test_connect_help_for_managed_shows_code_only(monkeypatch) -> None:
         assert "No such command 'scan'" in scan_result.output
 
 
-def test_role_help_for_managed_hides_list(monkeypatch) -> None:
+def test_role_help_for_managed_shows_same_core_commands(monkeypatch) -> None:
     runner = CliRunner()
     with runner.isolated_filesystem():
         Path("settings.toml").write_text('role = "managed"\nnode_name = "app"\n', encoding="utf-8")
         app = load_app(monkeypatch, "settings.toml")
         result = runner.invoke(app, ["role", "--help"], env={"HOMEBASE_SETTINGS_PATH": "settings.toml"})
         assert result.exit_code == 0
-        assert "list" not in result.stdout
+        assert "list" in result.stdout
         assert "show" in result.stdout
         assert "edit" in result.stdout
 

@@ -325,6 +325,40 @@ def rename_node(name: str, new_name: str, path: Path | None = None) -> Node:
     return renamed
 
 
+def remove_node(name: str, path: Path | None = None) -> Node:
+    """Remove one node from the registry and detach any direct children."""
+    normalized_name = name.strip()
+    nodes = load_nodes(path)
+    current = next((node for node in nodes if node.name == normalized_name), None)
+    if current is None:
+        raise ValueError(f"unknown node: {normalized_name}")
+    updated_nodes: list[Node] = []
+    for node in nodes:
+        if node.name == normalized_name:
+            continue
+        updated_nodes.append(
+            Node(
+                name=node.name,
+                parent=None if node.parent == normalized_name else node.parent,
+                kind=node.kind,
+                runtime_role=node.runtime_role,
+                address=node.address,
+                ssh_user=node.ssh_user,
+                description=node.description,
+                runtime_hostname=node.runtime_hostname,
+                node_id=node.node_id,
+                platform=node.platform,
+                client_port=node.client_port,
+                open_ports=node.open_ports,
+                services=node.services,
+                role_groups=node.role_groups,
+                states=node.states,
+            )
+        )
+    save_nodes(tuple(updated_nodes), path)
+    return current
+
+
 def set_node_runtime_role(name: str, runtime_role: str, path: Path | None = None) -> Node:
     """Set one node runtime role to controller or managed."""
     normalized_name = name.strip()
