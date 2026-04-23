@@ -94,7 +94,10 @@ Use object commands when you want to inspect or change one area directly.
 
 ```bash
 homebase role show
+homebase role list
+homebase role show host.app
 homebase role edit control
+homebase role edit host.app managed
 homebase node list
 homebase node show host.app
 homebase node edit host.app name host.api

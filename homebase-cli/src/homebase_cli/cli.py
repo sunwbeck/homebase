@@ -80,7 +80,7 @@ app = typer.Typer(no_args_is_help=True, help="Manage homebase control and manage
 connect_app = typer.Typer(invoke_without_command=True, help="Discover and register managed nodes.")
 node_app = typer.Typer(invoke_without_command=True, help="Inspect and manage registered nodes.")
 group_app = typer.Typer(invoke_without_command=True, help="Inspect and manage groups.")
-link_app = typer.Typer(invoke_without_command=True, help="Inspect and manage group-to-group links.")
+link_app = typer.Typer(invoke_without_command=True, help="Inspect and manage parent-child group links.")
 role_app = typer.Typer(invoke_without_command=True, help="Show or change the local role: control or managed.")
 ansible_app = typer.Typer(help="Run ansible-related helper commands.")
 client_app = typer.Typer(help="Run the homebase client service on one managed node.")
@@ -730,17 +730,54 @@ def inventory_list_command(target: str | None = typer.Argument(None, help="Optio
 
 
 @role_app.command("show")
-def role_show_command() -> None:
-    """Show the local role and local node name."""
-    _print_local_role()
+def role_show_command(target: str | None = typer.Argument(None, help="Optional node name.")) -> None:
+    """Show the local role, or one registered node role."""
+    if target is None:
+        _print_local_role()
+        return
+    _require_role("control")
+    node = find_node(target)
+    if node is None:
+        raise typer.BadParameter(f"unknown node: {target}")
+    console.print(f"node: {node.name}")
+    console.print(f"role: {node.runtime_role}")
+    console.print(f"kind: {node.kind}")
+
+
+@role_app.command("list")
+def role_list_command() -> None:
+    """List registered nodes and their roles."""
+    _require_role("control")
+    nodes = load_nodes()
+    if not nodes:
+        console.print("registered nodes: none")
+        return
+    table = Table(show_header=True, header_style="bold")
+    table.add_column("Node")
+    table.add_column("Role")
+    table.add_column("Kind")
+    current_name = _current_node_name()
+    for node in nodes:
+        label = f"{node.name} (local)" if current_name and node.name == current_name else node.name
+        table.add_row(label, node.runtime_role, node.kind)
+    console.print(table)
 
 
 @role_app.command("edit")
 def role_edit_command(
-    runtime_role: str = typer.Argument(..., help="New local role: control or managed."),
+    target_or_role: str = typer.Argument(..., help="Local role value, or a node name when editing a registered node."),
+    runtime_role: str | None = typer.Argument(None, help="New role for the selected registered node."),
 ) -> None:
-    """Edit the local role."""
-    _set_local_role(runtime_role)
+    """Edit the local role, or one registered node role."""
+    if runtime_role is None:
+        _set_local_role(target_or_role)
+        return
+    _require_role("control")
+    try:
+        updated = set_node_runtime_role(target_or_role, runtime_role)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    console.print(f"[green]Set node role:[/green] {updated.name} -> {updated.runtime_role}")
 
 
 @inventory_app.command("name", hidden=True)
@@ -1315,7 +1352,7 @@ def _build_group_app() -> typer.Typer:
 
 
 def _build_link_app() -> typer.Typer:
-    runtime_link_app = typer.Typer(invoke_without_command=True, help="Inspect and manage group-to-group links.")
+    runtime_link_app = typer.Typer(invoke_without_command=True, help="Inspect and manage parent-child group links.")
     runtime_link_app.callback()(link_callback)
     runtime_link_app.command("list")(link_list_command)
     runtime_link_app.command("add")(link_add_command)
@@ -1324,8 +1361,9 @@ def _build_link_app() -> typer.Typer:
 
 
 def _build_role_app() -> typer.Typer:
-    runtime_role_app = typer.Typer(invoke_without_command=True, help="Show or change the local role: control or managed.")
+    runtime_role_app = typer.Typer(invoke_without_command=True, help="Inspect and manage local or registered node roles.")
     runtime_role_app.callback()(role_callback)
+    runtime_role_app.command("list")(role_list_command)
     runtime_role_app.command("show")(role_show_command)
     runtime_role_app.command("edit")(role_edit_command)
     return runtime_role_app

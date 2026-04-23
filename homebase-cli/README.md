@@ -16,6 +16,7 @@ General:
 ```bash
 homebase init
 homebase role show
+homebase role list
 homebase status
 homebase inventory
 homebase package status
@@ -36,6 +37,8 @@ homebase status
 homebase connect scan
 homebase connect add
 homebase group add app-tier
+homebase role show host.app
+homebase role edit host.app managed
 homebase node show host.app
 homebase node assign host.app app-tier
 homebase node edit host.app name host.api
