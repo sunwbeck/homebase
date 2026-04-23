@@ -196,6 +196,15 @@ def _show_node_details(node_name: str) -> None:
     node = find_node(node_name)
     if node is None:
         raise typer.BadParameter(f"unknown node: {node_name}")
+    local_profile_data = None
+    if _current_node_name() and node.name == _current_node_name():
+        try:
+            local_profile_data = local_profile()
+        except Exception:
+            local_profile_data = None
+    platform_value = node.platform or (local_profile_data.platform if local_profile_data is not None else None)
+    open_ports = node.open_ports or (local_profile_data.open_ports if local_profile_data is not None else ())
+    services = node.services or (local_profile_data.services if local_profile_data is not None else ())
     console.print(f"[bold]Node: {node.name}[/bold]")
     console.print(f"role: {node.runtime_role}")
     console.print(f"groups: {', '.join(node.role_groups) if node.role_groups else 'none'}")
@@ -206,8 +215,12 @@ def _show_node_details(node_name: str) -> None:
         console.print(f"address: {node.address}")
     if node.runtime_hostname:
         console.print(f"hostname: {node.runtime_hostname}")
-    if node.platform:
-        console.print(f"platform: {node.platform}")
+    if platform_value:
+        console.print(f"os: {platform_value}")
+    if open_ports:
+        console.print(f"open ports: {', '.join(str(port) for port in open_ports)}")
+    if services:
+        console.print(f"services: {', '.join(services)}")
 
 
 def _show_group_details(group_name: str) -> None:
@@ -229,24 +242,47 @@ def _print_registered_overview() -> None:
     table.add_column("Role")
     table.add_column("Address")
     table.add_column("Hostname")
-    table.add_column("Platform")
+    table.add_column("OS")
+    table.add_column("Open Ports")
+    table.add_column("Services")
     table.add_column("Groups")
     current_name = _current_node_name()
     if not nodes:
         if current_name and _current_runtime_role():
-            table.add_row(f"{current_name} (local)", _current_runtime_role() or "", "", socket.gethostname(), "", "")
+            try:
+                profile = local_profile()
+                table.add_row(
+                    f"{current_name} (local)",
+                    _current_runtime_role() or "",
+                    "",
+                    profile.hostname,
+                    profile.platform,
+                    ", ".join(str(port) for port in profile.open_ports),
+                    ", ".join(profile.services),
+                    "",
+                )
+            except Exception:
+                table.add_row(f"{current_name} (local)", _current_runtime_role() or "", "", socket.gethostname(), "", "", "", "")
             console.print(table)
         else:
             console.print("registered nodes: none")
     else:
         for node in nodes:
             label = f"{node.name} (local)" if current_name and node.name == current_name else node.name
+            local_profile_data = None
+            if current_name and node.name == current_name:
+                try:
+                    local_profile_data = local_profile()
+                except Exception:
+                    local_profile_data = None
             table.add_row(
                 label,
                 node.runtime_role,
                 node.address or "",
-                node.runtime_hostname or "",
-                node.platform or "",
+                node.runtime_hostname or (local_profile_data.hostname if local_profile_data is not None else ""),
+                node.platform or (local_profile_data.platform if local_profile_data is not None else ""),
+                ", ".join(str(port) for port in (node.open_ports or (local_profile_data.open_ports if local_profile_data is not None else ()))),
+                ", ".join(node.services or (local_profile_data.services if local_profile_data is not None else ())),
                 ", ".join(node.role_groups) if node.role_groups else "",
             )
         console.print(table)
