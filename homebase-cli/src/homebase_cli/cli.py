@@ -15,7 +15,8 @@ from datetime import UTC, datetime
 
 import click
 import typer
-from rich.progress import BarColumn, Progress, SpinnerColumn, TaskProgressColumn, TextColumn, TimeElapsedColumn
+from rich.live import Live
+from rich.progress import Progress, SpinnerColumn, BarColumn, TaskProgressColumn, TextColumn
 from rich.table import Table
 from rich.console import Console
 
@@ -483,15 +484,18 @@ def _local_package_status_payload() -> dict[str, object]:
     }
 
 
-def _package_progress():
-    """Build one progress renderer for package batch operations."""
-    return Progress(
-        SpinnerColumn(),
-        TextColumn("{task.description}"),
-        BarColumn(),
-        TaskProgressColumn(),
-        console=console,
-    )
+def _package_stage_table(description_prefix: str, stage_state: dict[str, tuple[int, int, str, str]]) -> Table:
+    """Build one live package stage table without fake progress bars."""
+    table = Table(show_header=True, header_style="bold")
+    table.add_column("Node")
+    table.add_column("Status")
+    table.add_column("Step")
+    table.add_column("Stage")
+    for node_name in sorted(stage_state):
+        step, total, label, status = stage_state[node_name]
+        table.add_row(node_name, status, f"{step}/{total}", label)
+    table.title = description_prefix
+    return table
 
 
 def _run_package_batch(
@@ -505,44 +509,37 @@ def _run_package_batch(
     if not selected_nodes:
         return []
     rows: dict[str, tuple[str, ...]] = {}
-    stage_state: dict[str, tuple[int, int, str]] = {}
+    stage_state: dict[str, tuple[int, int, str, str]] = {}
     max_workers = min(8, max(1, len(selected_nodes)))
-    progress = _package_progress()
-    with progress:
+    with Live(_package_stage_table(description_prefix, stage_state), console=console, refresh_per_second=8) as live:
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             future_map = {}
             for node in selected_nodes:
-                task_id = progress.add_task(f"{description_prefix}: {node.name} (1/4 queued)", total=4, completed=1)
                 def stage_callback(step: int, total: int, label: str, *, _name=node.name) -> None:
-                    stage_state[_name] = (step, total, label)
+                    current = stage_state.get(_name, (step, total, label, "running"))
+                    stage_state[_name] = (step, total, label, current[3])
+                    live.update(_package_stage_table(description_prefix, stage_state), refresh=True)
+                stage_state[node.name] = (1, 4, "queued", "waiting")
+                live.update(_package_stage_table(description_prefix, stage_state), refresh=True)
                 future = executor.submit(worker, node, stage_callback)
-                stage_state[node.name] = (2, 4, "dispatched")
-                future_map[future] = (node, task_id)
+                stage_state[node.name] = (2, 4, "dispatched", "running")
+                live.update(_package_stage_table(description_prefix, stage_state), refresh=True)
+                future_map[future] = node
             while future_map:
                 finished = []
-                for future, (node, task_id) in list(future_map.items()):
-                    step, total, label = stage_state.get(node.name, (2, 4, "dispatched"))
-                    _update_batch_stage(progress, task_id, description_prefix, node.name, step, total, label)
+                for future, node in list(future_map.items()):
                     if future.done():
                         payload = future.result()
                         rows[node.name] = row_builder(node, payload)
-                        _update_batch_stage(progress, task_id, description_prefix, node.name, total, total, "done")
+                        step, total, label, _ = stage_state.get(node.name, (1, 1, "done", "running"))
+                        stage_state[node.name] = (total, total, label if label == "done" else "done", "done")
+                        live.update(_package_stage_table(description_prefix, stage_state), refresh=True)
                         finished.append(future)
                 for future in finished:
                     del future_map[future]
                 if future_map:
                     time.sleep(0.1)
     return [rows[node.name] for node in selected_nodes if node.name in rows]
-
-
-def _update_batch_stage(progress: Progress, task_id, prefix: str, node_name: str, step: int, total: int, label: str) -> None:
-    """Render one package batch stage update."""
-    progress.update(
-        task_id,
-        total=total,
-        completed=step,
-        description=f"{prefix}: {node_name} ({step}/{total} {label})",
-    )
 
 
 def _choose_runtime_role() -> str:
