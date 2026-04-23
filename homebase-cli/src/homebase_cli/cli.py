@@ -1192,10 +1192,13 @@ def node_edit_command(
     """
     _require_role("controller")
     selected_target = target or _choose_registered_node()
-    selected_value = (new_name.strip() if new_name is not None else "") or typer.prompt("New node name").strip()
     node = find_node(selected_target)
     if node is None:
         raise typer.BadParameter(f"unknown node: {selected_target}")
+    selected_value = (new_name.strip() if new_name is not None else "") or typer.prompt(
+        "New node name",
+        default=node.name,
+    ).strip()
     try:
         renamed = rename_node(node.name, selected_value)
         if _current_node_name() == node.name:
@@ -1278,7 +1281,11 @@ def group_edit_command(
     _require_role("controller")
     selected_group = group or _choose_registered_group()
     selected_field = (field or _pick_from_list("Group field", ("name", "description"))).strip().lower()
-    selected_value = value or typer.prompt("New value").strip()
+    current_group = _find_group(selected_group)
+    if current_group is None:
+        raise typer.BadParameter(f"unknown group: {selected_group}")
+    default_value = current_group.name if selected_field == "name" else current_group.description
+    selected_value = (value.strip() if value is not None else "") or typer.prompt("New value", default=default_value).strip()
     normalized = selected_field
     try:
         if normalized == "name":

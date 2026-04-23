@@ -360,6 +360,20 @@ def test_node_edit_name_updates_local_node_name(monkeypatch) -> None:
         assert 'node_name = "host.api"' in Path("settings.toml").read_text(encoding="utf-8")
 
 
+def test_node_edit_blank_input_keeps_current_name(monkeypatch) -> None:
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        env = {"HOMEBASE_SETTINGS_PATH": "settings.toml", "HOMEBASE_REGISTRY_PATH": "nodes.toml"}
+        Path("settings.toml").write_text('role = "controller"\nnode_name = "app"\n', encoding="utf-8")
+        Path("nodes.toml").write_text('[[nodes]]\nname = "app"\nkind = "vm"\nruntime_role = "managed"\n', encoding="utf-8")
+        app = load_app(monkeypatch, "settings.toml")
+        monkeypatch.setattr("homebase_cli.cli._pick_from_list", lambda label, options: "app (local)")
+        result = runner.invoke(app, ["node", "edit"], env=env, input="\n")
+        assert result.exit_code == 0
+        assert "Renamed node:" in result.stdout
+        assert "app -> app" in result.stdout
+
+
 def test_group_edit_without_args_prompts_for_group_and_field(monkeypatch) -> None:
     runner = CliRunner()
     with runner.isolated_filesystem():
