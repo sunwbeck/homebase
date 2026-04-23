@@ -734,8 +734,8 @@ def _run_controller_service_forever() -> None:
 
 @service_app.command("start")
 def service_start_command(
-    host: str = typer.Option("0.0.0.0", "--host", help="Listen address for the client endpoint."),
-    port: int = typer.Option(DEFAULT_CLIENT_PORT, "--port", help="Listen port for the client endpoint."),
+    host: str = typer.Option("0.0.0.0", "--host", help="Listen address for the managed connect endpoint."),
+    port: int = typer.Option(DEFAULT_CLIENT_PORT, "--port", help="Listen port for the managed connect endpoint."),
     foreground: bool = typer.Option(False, "--foreground", hidden=True),
 ) -> None:
     """Start the local background service."""
@@ -766,8 +766,8 @@ def service_start_command(
         sys.executable,
         "-m",
         "homebase_cli.cli",
-        "connect",
-        "serve",
+        "service",
+        "start",
         "--host",
         host,
         "--port",
