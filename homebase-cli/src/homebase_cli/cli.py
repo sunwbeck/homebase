@@ -92,144 +92,45 @@ from homebase_cli.settings import (
 
 app = typer.Typer(
     no_args_is_help=True,
-    help=dedent(
-        """\
-        Operate one homebase system from either a controller node or a managed node.
-
-        Start with:
-          homebase init
-
-        Common controller flow:
-          homebase status
-          homebase connect scan
-          homebase connect add
-
-        Common managed flow:
-          homebase connect code
-          homebase service start
-        """
-    ),
+    help="Operate homebase nodes from either a controller or a managed node.",
 )
 connect_app = typer.Typer(
     invoke_without_command=True,
-    help=dedent(
-        """\
-        Pair controllers and managed nodes.
-
-        Controller:
-          homebase connect scan
-          homebase connect add host.app
-
-        Managed:
-          homebase connect code
-          homebase connect status
-        """
-    ),
+    help="Pair controllers and managed nodes.",
 )
 node_app = typer.Typer(
     invoke_without_command=True,
-    help=dedent(
-        """\
-        Inspect and edit registered nodes.
-
-        Examples:
-          homebase node list
-          homebase node show host.app
-          homebase node edit host.app name host.api
-          homebase node assign host.app app-tier
-        """
-    ),
+    help="Inspect and edit registered nodes.",
 )
 group_app = typer.Typer(
     invoke_without_command=True,
-    help=dedent(
-        """\
-        Inspect and edit reusable node groups.
-
-        Examples:
-          homebase group list
-          homebase group add app-tier
-          homebase group edit app-tier description "application workloads"
-        """
-    ),
+    help="Inspect and edit reusable node groups.",
 )
 link_app = typer.Typer(
     invoke_without_command=True,
-    help=dedent(
-        """\
-        Manage parent-child links between groups.
-
-        Use this to build hierarchy such as:
-          host-node -> app-tier
-        """
-    ),
+    help="Manage parent-child links between groups.",
 )
 role_app = typer.Typer(
     invoke_without_command=True,
-    help=dedent(
-        """\
-        Show or change runtime roles.
-
-        Local role:
-          homebase role show
-          homebase role edit controller
-
-        Registered node role from a controller:
-          homebase role list
-          homebase role edit host.app managed
-        """
-    ),
+    help="Show or change local or registered node runtime roles.",
 )
 ansible_app = typer.Typer(help="Run ansible helper commands against the current inventory.")
 inventory_app = typer.Typer(
     invoke_without_command=True,
-    help=dedent(
-        """\
-        Work with the rendered ansible inventory file.
-
-        Examples:
-          homebase inventory show
-          homebase inventory edit
-        """
-    ),
+    help="Work with the rendered ansible inventory file.",
 )
 state_app = typer.Typer(
     invoke_without_command=True,
-    help=dedent(
-        """\
-        Save simple labels or operator state on registered nodes.
-
-        Examples:
-          homebase state show host.app
-          homebase state set host.app status active
-        """
-    ),
+    help="Save simple labels or operator state on registered nodes.",
 )
 package_app = typer.Typer(
     invoke_without_command=True,
-    help=dedent(
-        """\
-        Check the installed homebase revision and install or update from GitHub.
-
-        Examples:
-          homebase package status
-          homebase package versions
-          homebase package update
-          homebase package install --ref v0.1.8
-        """
-    ),
+    help="Check the installed homebase revision and install or update from GitHub.",
 )
 dev_app = typer.Typer(help="Development, diagnostics, and internal helper commands.")
 service_app = typer.Typer(
     invoke_without_command=True,
-    help=dedent(
-        """\
-        Run the local background service on this node.
-
-        Managed nodes run the connect endpoint here.
-        Controller nodes run the long-lived controller daemon here.
-        """
-    ),
+    help="Run the local background service on this node.",
 )
 console = Console()
 DEFAULT_KIND_CHOICES = ("controller", "workstation", "host", "vm", "node")
@@ -360,7 +261,7 @@ def _resolve_remote_package_target(resource: str):
 
 
 def _choose_runtime_role() -> str:
-    return _pick_from_list("Node type", list(runtime_roles()))
+    return _pick_from_list("Local runtime role", list(runtime_roles()))
 
 
 def _find_group(name: str) -> RoleGroup | None:
@@ -872,13 +773,19 @@ def ansible_ping_command(node: str = typer.Argument(..., help="Registered node n
         raise typer.Exit(code=result.returncode)
 
 
-@app.command("docs")
+@app.command("doc")
 def docs_command(doc: str | None = typer.Argument(None, help="Optional docs key such as current-state.")) -> None:
-    """List repo docs or show one known doc entry."""
+    """List homebase docs or print one doc so it can be read in the terminal."""
     if doc is None:
         rows = [(entry.key, entry.filename, entry.summary) for entry in list_docs()]
         print_docs_table(rows)
-        console.print(f"\nDocs root: [cyan]{docs_root()}[/cyan]")
+        console.print("\nUse `homebase doc <key>` to print one document in the terminal.")
+        local_root = docs_root()
+        if local_root is not None:
+            console.print(f"Local docs root: [cyan]{local_root}[/cyan]")
+        else:
+            console.print("Local docs root: not available in this installation")
+            console.print("GitHub docs: [cyan]https://github.com/sunwbeck/homebase/tree/main/docs[/cyan]")
         return
 
     entry = get_doc(doc)
@@ -886,8 +793,23 @@ def docs_command(doc: str | None = typer.Argument(None, help="Optional docs key 
         raise typer.BadParameter(f"unknown doc: {doc}")
 
     console.print(f"[bold]{entry.title}[/bold]")
-    console.print(f"path: {entry.path}")
+    local_root = docs_root()
+    local_path = local_root / entry.filename if local_root is not None else None
+    if local_path is not None:
+        console.print(f"path: {local_path}")
+    console.print(f"github: {entry.url}")
     console.print(f"summary: {entry.summary}")
+    console.print("")
+    if local_path is not None and local_path.exists():
+        console.print(local_path.read_text(encoding="utf-8"))
+    else:
+        console.print("Local doc copy is not available in this installation.")
+
+
+@app.command("docs", hidden=True)
+def docs_alias_command(doc: str | None = typer.Argument(None, help="Optional docs key such as current-state.")) -> None:
+    """Hidden alias for `homebase doc`."""
+    docs_command(doc)
 
 
 @connect_app.command("identity", hidden=True)
@@ -901,10 +823,7 @@ def client_identity_command() -> None:
 def client_code_command(
     refresh: bool = typer.Option(False, "--refresh", help="Generate a new 8-digit pairing code before printing it."),
 ) -> None:
-    """Print the current 8-digit pairing code for this managed node.
-
-    Use `--refresh` to invalidate the old code and create a new one.
-    """
+    """Print the current 8-digit pairing code for this managed node."""
     _require_role("managed")
     state = refresh_pair_code() if refresh else load_client_state()
     console.print(_format_pair_code(state.pair_code))
@@ -1054,8 +973,16 @@ def service_stop_command() -> None:
 
 def _run_init(role: str | None = None, name: str | None = None) -> None:
     """Initialize this installation with a local role and node name."""
+    if role is None:
+        console.print("[bold]Initial setup[/bold]")
+        console.print("homebase needs two local values before normal use:")
+        console.print("1. runtime role: controller or managed")
+        console.print("2. node name: the name shown in status, inventory, and pairing output")
     selected = role.strip().lower() if role is not None else _choose_runtime_role()
-    selected_name = (name.strip() if name is not None else "") or typer.prompt("Node name", default=_current_node_name() or socket.gethostname())
+    selected_name = (name.strip() if name is not None else "") or typer.prompt(
+        "Local node name",
+        default=_current_node_name() or socket.gethostname(),
+    )
     try:
         updated = set_role(selected)
         previous_name = _current_node_name()
@@ -1077,15 +1004,7 @@ def init_command(
     role: str | None = typer.Option(None, "--role", help="Optional node type to set directly: controller or managed."),
     name: str | None = typer.Option(None, "--name", help="Optional local node name to register directly."),
 ) -> None:
-    """Initialize this installation before normal use.
-
-    This sets:
-      - the local runtime role: `controller` or `managed`
-      - the local node name used in status, inventory, and pairing output
-
-    Run this once after the first install, or run it again later to rename the
-    local node or switch its local runtime role.
-    """
+    """Initialize this installation by setting the local runtime role and node name."""
     _run_init(role=role, name=name)
 
 
@@ -1152,16 +1071,7 @@ def node_edit_command(
     field: str = typer.Argument(..., help="Field to edit: name or role."),
     value: str = typer.Argument(..., help="New value."),
 ) -> None:
-    """Edit one registered node.
-
-    Supported fields:
-      - name
-      - role
-
-    Examples:
-      homebase node edit host.app name host.api
-      homebase node edit host.app role managed
-    """
+    """Edit one registered node."""
     normalized = field.strip().lower()
     if normalized == "name":
         _require_role("controller")
@@ -1213,10 +1123,7 @@ def group_list_command() -> None:
 
 @group_app.command("show")
 def group_show_command(group: str = typer.Argument(..., help="Group name.")) -> None:
-    """Show one group in detail.
-
-    The detailed view includes parents, children, assigned nodes, and description.
-    """
+    """Show one group in detail."""
     _require_role("controller")
     _show_group_details(group)
 
@@ -1238,12 +1145,7 @@ def group_edit_command(
     field: str = typer.Argument(..., help="Field to edit: name or description."),
     value: str = typer.Argument(..., help="New value."),
 ) -> None:
-    """Edit one group.
-
-    Supported fields:
-      - name
-      - description
-    """
+    """Edit one group."""
     _require_role("controller")
     normalized = field.strip().lower()
     try:
@@ -1373,10 +1275,7 @@ def node_unassign_command(
 
 @inventory_app.command("show")
 def inventory_show_command() -> None:
-    """Render and print the ansible inventory YAML.
-
-    Use this when you want to inspect the exact YAML that ansible commands will use.
-    """
+    """Render and print the ansible inventory YAML."""
     _require_role("controller")
     target = write_ansible_inventory()
     console.print(f"[green]Inventory YAML:[/green] {target}")
@@ -1385,7 +1284,7 @@ def inventory_show_command() -> None:
 
 @inventory_app.command("edit")
 def inventory_edit_command() -> None:
-    """Render the ansible inventory YAML and open it in `$EDITOR` for manual edits."""
+    """Render the ansible inventory YAML and open it in `$EDITOR`."""
     _require_role("controller")
     target = open_ansible_inventory()
     console.print(f"[green]Opened ansible inventory:[/green] {target}")
@@ -1493,10 +1392,7 @@ def package_versions_command(
     repo_url: str = typer.Option(DEFAULT_REPO_URL, "--repo", help="GitHub repository URL."),
     include_prerelease: bool = typer.Option(False, "--pre-release", help="Include prerelease GitHub releases."),
 ) -> None:
-    """List installable GitHub refs with short release notes.
-
-    This is the place to look before `homebase package install --ref ...`.
-    """
+    """List installable GitHub refs with short release notes."""
     try:
         versions = github_versions(repo_url, include_prerelease=include_prerelease)
     except RuntimeError as exc:
@@ -1588,13 +1484,7 @@ def package_install_command(
     python_bin: str | None = typer.Option(None, "--python", help="Explicit Python executable to install into. Defaults to the current Python environment."),
     include_prerelease: bool = typer.Option(False, "--pre-release", help="Include prerelease GitHub releases when choosing interactively."),
 ) -> None:
-    """Install one GitHub ref, or choose one interactively.
-
-    Examples:
-      homebase package install --ref main
-      homebase package install --ref v0.1.8
-      homebase package install host.app --ref main
-    """
+    """Install one GitHub ref, or choose one interactively."""
     selected_summary: str | None = None
     selected_ref = ref
     if selected_ref is None:
@@ -1646,11 +1536,7 @@ def package_update_command(
     python_bin: str | None = typer.Option(None, "--python", help="Explicit Python executable to install into. Defaults to the current Python environment."),
     include_prerelease: bool = typer.Option(False, "--pre-release", help="Allow prerelease versions when selecting the latest target."),
 ) -> None:
-    """Update to the latest available GitHub target.
-
-    If the repo has releases or tags, the newest one is used.
-    Otherwise the default branch is used.
-    """
+    """Update to the latest available GitHub target."""
     try:
         latest = latest_github_version(repo_url, include_prerelease=include_prerelease)
     except RuntimeError as exc:
@@ -1784,6 +1670,8 @@ def _build_root_app() -> typer.Typer:
     runtime_app = typer.Typer(no_args_is_help=True, help=app.info.help)
     runtime_app.command("init")(init_command)
     runtime_app.command("status")(status_command)
+    runtime_app.command("doc")(docs_command)
+    runtime_app.command("docs", hidden=True)(docs_alias_command)
     runtime_app.add_typer(_build_role_app(), name="role")
     runtime_app.add_typer(_build_node_app(), name="node")
     runtime_app.add_typer(_build_group_app(), name="group")

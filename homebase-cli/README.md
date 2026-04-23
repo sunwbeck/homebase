@@ -89,3 +89,11 @@ bash ../scripts/install-homebase.sh
 ```
 
 The goal for the CLI help is self-guided operation. `homebase --help` and each subcommand help screen should be enough for an operator or an LLM to find the next command without external notes.
+
+For the longer manual and repo docs:
+
+```bash
+homebase doc
+homebase doc current-state
+homebase doc cli-plan
+```

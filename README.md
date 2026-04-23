@@ -32,6 +32,14 @@ On first run, `homebase` or `hb` starts `homebase init` automatically if the loc
 
 `homebase --help` and every subcommand `--help` are written to be usable on their own. The intended workflow is that a human or an LLM can discover the next command from help output without separate notes.
 
+For longer operator guidance and architecture docs:
+
+```bash
+homebase doc
+homebase doc current-state
+homebase doc cli-plan
+```
+
 ## Basic Flow
 
 On the controller node:

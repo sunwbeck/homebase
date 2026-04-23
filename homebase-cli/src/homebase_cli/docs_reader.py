@@ -1,14 +1,16 @@
-"""Helpers for reading the NAS-backed homebase documentation set."""
+"""Helpers for reading the homebase documentation set."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Iterable
 
-from homebase_cli.paths import NAS_HOMEBASE
-
-
-DOCS_ROOT = NAS_HOMEBASE / "docs"
+REPO_DOC_CANDIDATES = (
+    Path("/home/sun/homebase/docs"),
+    Path(__file__).resolve().parents[3] / "docs",
+)
+GITHUB_DOCS_BASE_URL = "https://github.com/sunwbeck/homebase/blob/main/docs"
 
 
 @dataclass(frozen=True)
@@ -21,9 +23,9 @@ class DocEntry:
     summary: str
 
     @property
-    def path(self) -> Path:
-        """Return the absolute path to the document."""
-        return DOCS_ROOT / self.filename
+    def url(self) -> str:
+        """Return the GitHub URL for the document."""
+        return f"{GITHUB_DOCS_BASE_URL}/{self.filename}"
 
 
 DOCS = (
@@ -41,9 +43,16 @@ DOCS = (
 )
 
 
-def docs_root() -> Path:
-    """Return the canonical NAS docs path."""
-    return DOCS_ROOT
+def _existing_docs_root(candidates: Iterable[Path]) -> Path | None:
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def docs_root() -> Path | None:
+    """Return the local docs path when one is available."""
+    return _existing_docs_root(REPO_DOC_CANDIDATES)
 
 
 def list_docs() -> tuple[DocEntry, ...]:
@@ -55,14 +64,18 @@ def get_doc(key: str) -> DocEntry | None:
     """Resolve a doc by key or filename stem."""
     normalized = key.strip().lower()
     for entry in DOCS:
-        if normalized in {entry.key, entry.filename, entry.path.stem}:
+        filename_stem = Path(entry.filename).stem
+        if normalized in {entry.key, entry.filename, filename_stem}:
             return entry
     return None
 
 
 def read_doc(key: str) -> str:
-    """Read a known document from disk."""
+    """Read a known document from disk when a local docs checkout exists."""
     entry = get_doc(key)
     if entry is None:
         raise KeyError(f"unknown doc: {key}")
-    return entry.path.read_text(encoding="utf-8")
+    root = docs_root()
+    if root is None:
+        raise FileNotFoundError(f"local docs checkout not found for {entry.filename}")
+    return (root / entry.filename).read_text(encoding="utf-8")

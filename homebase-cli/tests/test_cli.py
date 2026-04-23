@@ -135,6 +135,9 @@ def test_init_interactive_can_choose_managed(monkeypatch) -> None:
         app = load_app(monkeypatch, "settings.toml")
         result = runner.invoke(app, ["init"], env={"HOMEBASE_SETTINGS_PATH": "settings.toml"}, input="2\napp\n")
         assert result.exit_code == 0
+        assert "Initial setup" in result.stdout
+        assert "runtime role" in result.stdout
+        assert "Local node name" in result.stdout
         assert "Set local node type to managed" in result.stdout
         assert "Registered local node name: app" in result.stdout
 
@@ -150,14 +153,13 @@ def test_main_starts_init_automatically_when_uninitialized(monkeypatch, capsys) 
     assert "Starting init" in captured.out
 
 
-def test_root_help_explains_common_flows(monkeypatch) -> None:
+def test_root_help_is_concise(monkeypatch) -> None:
     runner = CliRunner()
     app = load_app(monkeypatch)
     result = runner.invoke(app, ["--help"])
     assert result.exit_code == 0
-    assert "Start with:" in result.stdout
-    assert "Common controller flow:" in result.stdout
-    assert "Common managed flow:" in result.stdout
+    assert "Operate homebase nodes from either a controller or a managed node." in result.stdout
+    assert "Start with:" not in result.stdout
 
 
 def test_init_help_explains_role_and_name(monkeypatch) -> None:
@@ -177,20 +179,25 @@ def test_inventory_help_points_to_show_and_edit(monkeypatch) -> None:
         app = load_app(monkeypatch, "settings.toml")
         result = runner.invoke(app, ["inventory", "--help"], env=env)
         assert result.exit_code == 0
-        assert "homebase inventory show" in result.stdout
-        assert "homebase inventory edit" in result.stdout
+        assert "Work with the rendered ansible inventory file." in result.stdout
 
 
-def test_node_help_explains_examples(monkeypatch) -> None:
+def test_doc_lists_repo_docs(monkeypatch) -> None:
     runner = CliRunner()
-    with runner.isolated_filesystem():
-        env = {"HOMEBASE_SETTINGS_PATH": "settings.toml"}
-        Path("settings.toml").write_text('role = "controller"\nnode_name = "control"\n', encoding="utf-8")
-        app = load_app(monkeypatch, "settings.toml")
-        result = runner.invoke(app, ["node", "--help"], env=env)
-        assert result.exit_code == 0
-        assert "homebase node list" in result.stdout
-        assert "homebase node show host.app" in result.stdout
+    app = load_app(monkeypatch)
+    result = runner.invoke(app, ["doc"])
+    assert result.exit_code == 0
+    assert "Homebase Docs" in result.stdout
+    assert "Use `homebase doc <key>`" in result.stdout
+
+
+def test_doc_prints_document_content(monkeypatch) -> None:
+    runner = CliRunner()
+    app = load_app(monkeypatch)
+    result = runner.invoke(app, ["doc", "current-state"])
+    assert result.exit_code == 0
+    assert "Current State" in result.stdout
+    assert "current implementation direction" in result.stdout.lower()
 
 
 def test_status_shows_local_node(monkeypatch) -> None:
