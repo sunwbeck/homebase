@@ -140,7 +140,14 @@ def connect_server_running(path: Path | None = None) -> ConnectRuntime | None:
         return None
     try:
         os.kill(runtime.pid, 0)
+    except PermissionError:
+        return runtime
+    except ProcessLookupError:
+        clear_connect_runtime(path)
+        return None
     except OSError:
+        if Path(f"/proc/{runtime.pid}").exists():
+            return runtime
         clear_connect_runtime(path)
         return None
     return runtime

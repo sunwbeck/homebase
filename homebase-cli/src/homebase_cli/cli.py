@@ -144,6 +144,14 @@ def _pick_from_list(label: str, options: Sequence[str]) -> str:
     return options[choice - 1]
 
 
+def _format_pair_code(code: str) -> str:
+    """Render one pairing code in easier-to-read blocks."""
+    normalized = code.strip()
+    if len(normalized) == 8 and normalized.isdigit():
+        return f"{normalized[:4]} {normalized[4:]}"
+    return normalized
+
+
 def _is_interactive() -> bool:
     """Return True when stdin is interactive."""
     return sys.stdin.isatty()
@@ -539,31 +547,32 @@ def connect_status_command() -> None:
     if current_role == "managed":
         state = load_client_state()
         runtime = connect_server_running()
-        console.print("[bold]Connect status[/bold]")
-        console.print(f"pair code: {state.pair_code}")
-        console.print(f"paired controllers: {len(state.paired_controllers)}")
-        if state.paired_controllers:
-            console.print(f"controllers: {', '.join(state.paired_controllers)}")
-        console.print(f"service: {'running' if runtime is not None else 'stopped'}")
-        if runtime is not None:
-            console.print(f"host: {runtime.host}")
-            console.print(f"port: {runtime.port}")
+        table = Table(show_header=True, header_style="bold")
+        table.add_column("Pair Code")
+        table.add_column("Controllers")
+        table.add_column("Service")
+        table.add_column("Endpoint")
+        table.add_row(
+            _format_pair_code(state.pair_code),
+            ", ".join(state.paired_controllers) if state.paired_controllers else "",
+            "running" if runtime is not None else "stopped",
+            f"{runtime.host}:{runtime.port}" if runtime is not None else "",
+        )
+        console.print(table)
         return
     _require_role("controller")
     discovered = load_discovered_nodes()
-    pending = unregistered_discovered_nodes()
     nodes = load_nodes()
-    console.print("[bold]Connect status[/bold]")
-    console.print(f"registered nodes: {len(nodes)}")
-    console.print(f"discovered nodes: {len(discovered)}")
-    console.print(f"unregistered discovered nodes: {len(pending)}")
     if not discovered:
+        console.print("discovered nodes: none")
         return
     table = Table(show_header=True, header_style="bold")
     table.add_column("Address")
     table.add_column("Hostname")
-    table.add_column("Platform")
-    table.add_column("Registered")
+    table.add_column("OS")
+    table.add_column("Version")
+    table.add_column("Node")
+    table.add_column("State")
     matched = {node.address: node.name for node in nodes if node.address}
     matched_ids = {node.node_id: node.name for node in nodes if node.node_id}
     for item in discovered:
@@ -572,7 +581,9 @@ def connect_status_command() -> None:
             item.address,
             item.discovery.hostname,
             item.discovery.platform,
+            item.discovery.version,
             registered_name,
+            "registered" if registered_name else "discovered",
         )
     console.print(table)
 
@@ -704,7 +715,7 @@ def client_code_command(
     """Print the current local pairing code."""
     _require_role("managed")
     state = refresh_pair_code() if refresh else load_client_state()
-    console.print(state.pair_code)
+    console.print(_format_pair_code(state.pair_code))
 
 
 @connect_app.command("profile", hidden=True)
@@ -741,7 +752,6 @@ def service_start_command(
     """Start the local background service."""
     current_role = _current_runtime_role() or "managed"
     if foreground:
-        clear_connect_runtime()
         if current_role == "managed":
             console.print(f"serving homebase client on {host}:{port}")
         else:
@@ -810,28 +820,30 @@ def service_start_command(
 def service_status_command() -> None:
     """Show the local background service status on this node."""
     current_role = _current_runtime_role()
+    table = Table(show_header=True, header_style="bold")
+    table.add_column("Mode")
+    table.add_column("State")
+    table.add_column("Endpoint")
+    table.add_column("PID")
+    table.add_column("Log")
     if current_role == "managed":
         runtime = connect_server_running()
         if runtime is None:
-            console.print("service: stopped")
+            table.add_row("managed connect", "stopped", "", "", str(CONNECT_LOG_PATH))
+            console.print(table)
             return
-        console.print("service: running")
-        console.print("mode: managed connect endpoint")
-        console.print(f"host: {runtime.host}")
-        console.print(f"port: {runtime.port}")
-        console.print(f"pid: {runtime.pid}")
+        table.add_row("managed connect", "running", f"{runtime.host}:{runtime.port}", str(runtime.pid), runtime.log_path)
+        console.print(table)
         console.print(f"started at: {runtime.started_at}")
-        console.print(f"log: {runtime.log_path}")
         return
     runtime = connect_server_running()
     if runtime is None:
-        console.print("service: stopped")
+        table.add_row("controller daemon", "stopped", "", "", str(CONNECT_LOG_PATH))
+        console.print(table)
         return
-    console.print("service: running")
-    console.print("mode: controller daemon")
-    console.print(f"pid: {runtime.pid}")
+    table.add_row("controller daemon", "running", "", str(runtime.pid), runtime.log_path)
+    console.print(table)
     console.print(f"started at: {runtime.started_at}")
-    console.print(f"log: {runtime.log_path}")
 
 
 @service_app.command("stop")
