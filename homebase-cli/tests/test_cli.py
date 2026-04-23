@@ -133,28 +133,36 @@ def test_role_templates_command_lists_skeletons() -> None:
 def test_role_group_commands_build_hierarchy() -> None:
     runner = CliRunner()
     with runner.isolated_filesystem():
-        env = {"HOMEBASE_SETTINGS_PATH": "settings.toml"}
+        env = {"HOMEBASE_SETTINGS_PATH": "settings.toml", "HOMEBASE_REGISTRY_PATH": "nodes.toml"}
+        Path("settings.toml").write_text('role = "control"\nroles = ["control", "client"]\n', encoding="utf-8")
+        Path("nodes.toml").write_text(
+            '[[nodes]]\nname = "host"\nkind = "host"\n\n[[nodes]]\nname = "host.app"\nparent = "host"\nkind = "vm"\n',
+            encoding="utf-8",
+        )
         assert runner.invoke(app, ["role", "add", "host-node", "--template", "host"], env=env).exit_code == 0
-        assert runner.invoke(app, ["role", "add", "app-vm", "--template", "node"], env=env).exit_code == 0
-        assert runner.invoke(app, ["role", "link", "host-node", "app-vm"], env=env).exit_code == 0
-        assert runner.invoke(app, ["role", "assign", "host-node"], env=env).exit_code == 0
-        status_result = runner.invoke(app, ["role", "status"], env=env)
+        assert runner.invoke(app, ["role", "add", "app-tier", "--template", "service"], env=env).exit_code == 0
+        assert runner.invoke(app, ["role", "link", "host-node", "app-tier"], env=env).exit_code == 0
+        assert runner.invoke(app, ["role", "assign", "host.app", "app-tier"], env=env).exit_code == 0
+        status_result = runner.invoke(app, ["role", "status", "host.app"], env=env)
         assert status_result.exit_code == 0
-        assert "host-node" in status_result.stdout
-        assert "app-vm" in status_result.stdout
+        assert "app-tier" in status_result.stdout
+        tree_result = runner.invoke(app, ["role", "status"], env=env)
+        assert "host-node" in tree_result.stdout
+        assert "app-tier" in tree_result.stdout
 
 
 def test_state_commands_store_values() -> None:
     runner = CliRunner()
     with runner.isolated_filesystem():
-        env = {"HOMEBASE_SETTINGS_PATH": "settings.toml"}
-        assert runner.invoke(app, ["state", "set", "site", "home"], env=env).exit_code == 0
-        assert runner.invoke(app, ["state", "set", "status", "active"], env=env).exit_code == 0
-        show_result = runner.invoke(app, ["state", "show"], env=env)
+        env = {"HOMEBASE_SETTINGS_PATH": "settings.toml", "HOMEBASE_REGISTRY_PATH": "nodes.toml"}
+        Path("nodes.toml").write_text('[[nodes]]\nname = "host.app"\nkind = "vm"\n', encoding="utf-8")
+        assert runner.invoke(app, ["state", "set", "host.app", "site", "home"], env=env).exit_code == 0
+        assert runner.invoke(app, ["state", "set", "host.app", "status", "active"], env=env).exit_code == 0
+        show_result = runner.invoke(app, ["state", "show", "host.app"], env=env)
         assert show_result.exit_code == 0
         assert "site" in show_result.stdout
         assert "active" in show_result.stdout
-        assert runner.invoke(app, ["state", "unset", "status"], env=env).exit_code == 0
+        assert runner.invoke(app, ["state", "unset", "host.app", "status"], env=env).exit_code == 0
 
 
 def test_package_versions_prints_github_versions(monkeypatch) -> None:
@@ -405,6 +413,7 @@ def test_role_help_uses_group_management_workflow() -> None:
     assert "add" in output
     assert "link" in output
     assert "assign" in output
+    assert "unassign" in output
 
 
 def test_state_help_uses_simple_state_commands() -> None:

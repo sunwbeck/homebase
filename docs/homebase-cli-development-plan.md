@@ -35,6 +35,7 @@ Design rule:
 - the client should self-report identity and current local facts
 - the client should not become a heavy autonomous management plane
 - long-lived metrics storage still belongs on `host.app`, not on each client
+- `control` should keep the registry-owned role-group definitions, node role assignments, and node state labels
 
 Near-term operator flow:
 

@@ -32,6 +32,7 @@ Related services operated through the control plane:
 - orchestrate predefined operations on managed nodes
 - orchestrate `homebase` install and upgrade on managed nodes
 - present which `homebase` revision is installed on each managed node
+- hold operator-defined role groups and state labels for registered nodes
 - provide a structured interface for status inspection
 - reduce the need for ad hoc direct administration
 - act as one approved ingress and policy orchestration point for services that are intentionally routed through `control`
@@ -42,6 +43,7 @@ The preferred managed-node model is:
 - managed nodes run a thin `homebase` client
 - clients self-report identity, local facts, and later heartbeat information
 - `control` does not depend on LAN guessing as the long-term source of node identity
+- `control` should store role-group definitions and node state labels in the registry it manages
 
 Preferred rollout model:
 

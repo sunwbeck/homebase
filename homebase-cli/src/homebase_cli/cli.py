@@ -33,7 +33,22 @@ from homebase_cli.packaging import (
     latest_github_version,
     load_install_state,
 )
-from homebase_cli.registry import add_node, child_nodes, load_nodes
+from homebase_cli.registry import (
+    RoleGroup,
+    add_node,
+    add_role_group,
+    assign_node_role_group,
+    child_nodes,
+    find_node,
+    link_role_group,
+    load_nodes,
+    load_role_groups,
+    remove_role_group,
+    set_node_state,
+    unassign_node_role_group,
+    unlink_role_group,
+    unset_node_state,
+)
 from homebase_cli.resources import all_resources, child_resources, find_resource
 from homebase_cli.scanner import (
     detect_scannable_networks,
@@ -48,22 +63,11 @@ from homebase_cli.scanner import (
 )
 from homebase_cli.selftest import run_client_self_test
 from homebase_cli.settings import (
-    add_group,
     add_role,
-    assign_group,
-    link_group,
-    list_group_memberships,
-    list_groups,
     list_roles,
-    list_states,
     load_settings,
-    remove_group,
     role_templates,
     set_role,
-    set_state_value,
-    unlink_group,
-    unassign_group,
-    unset_state_value,
 )
 
 
@@ -145,12 +149,12 @@ def _choose_or_add_role() -> str:
     return selected
 
 
-def _group_index() -> dict[str, object]:
-    return {group.name: group for group in list_groups()}
+def _group_index() -> dict[str, RoleGroup]:
+    return {group.name: group for group in load_role_groups()}
 
 
 def _group_roots() -> list[str]:
-    groups = list_groups()
+    groups = load_role_groups()
     child_names = {member for group in groups for member in group.members}
     roots = [group.name for group in groups if group.name not in child_names]
     return sorted(roots)
@@ -508,18 +512,21 @@ def init_command(
 
 
 @role_app.command("status")
-def role_status_command() -> None:
-    """Show local role-group memberships and the saved group tree."""
-    settings = load_settings()
-    memberships = settings.group_memberships
-    console.print("[bold]Current role groups[/bold]")
-    if memberships:
-        console.print("assigned:")
-        for name in memberships:
-            console.print(f"- {name}")
+def role_status_command(resource: str | None = typer.Argument(None, help="Optional resource path such as host.app.")) -> None:
+    """Show saved role groups and one node's current group assignments."""
+    groups = load_role_groups()
+    if resource is not None:
+        node = find_node(resource)
+        if node is None:
+            raise typer.BadParameter(f"unknown node: {resource}")
+        console.print(f"[bold]Role assignments: {node.name}[/bold]")
+        if node.role_groups:
+            for name in node.role_groups:
+                console.print(f"- {name}")
+        else:
+            console.print("none")
     else:
-        console.print("assigned: none")
-    groups = list_groups()
+        console.print("[bold]Role group tree[/bold]")
     if not groups:
         console.print("defined groups: none")
         return
@@ -547,7 +554,7 @@ def role_templates_command() -> None:
 @role_app.command("list")
 def role_list_command() -> None:
     """List defined role groups."""
-    groups = list_groups()
+    groups = load_role_groups()
     if not groups:
         console.print("[yellow]No role groups defined yet.[/yellow]")
         return
@@ -574,7 +581,7 @@ def role_add_command(
 ) -> None:
     """Add one local role group."""
     try:
-        add_group(name, template=template, description=description or None)
+        add_role_group(name=name, template=template, description=description)
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
     console.print(f"[green]Added role group:[/green] {name.strip().lower()}")
@@ -584,7 +591,7 @@ def role_add_command(
 def role_remove_command(name: str = typer.Argument(..., help="Group name.")) -> None:
     """Remove one local role group."""
     try:
-        remove_group(name)
+        remove_role_group(name)
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
     console.print(f"[green]Removed role group:[/green] {name.strip().lower()}")
@@ -597,7 +604,7 @@ def role_link_command(
 ) -> None:
     """Link one child group under one parent group."""
     try:
-        link_group(parent, child)
+        link_role_group(parent, child)
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
     console.print(f"[green]Linked group:[/green] {child.strip().lower()} -> {parent.strip().lower()}")
@@ -610,33 +617,45 @@ def role_unlink_command(
 ) -> None:
     """Remove one child group link from one parent group."""
     try:
-        unlink_group(parent, child)
+        unlink_role_group(parent, child)
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
     console.print(f"[green]Unlinked group:[/green] {child.strip().lower()} from {parent.strip().lower()}")
 
 
 @role_app.command("assign")
-def role_assign_command(name: str = typer.Argument(..., help="Group name.")) -> None:
-    """Assign the current node to one role group."""
+def role_assign_command(
+    resource: str = typer.Argument(..., help="Resource path such as host.app."),
+    name: str = typer.Argument(..., help="Group name."),
+) -> None:
+    """Assign one registered node to one role group."""
     try:
-        assign_group(name)
+        assign_node_role_group(resource, name)
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
-    console.print(f"[green]Assigned current node to:[/green] {name.strip().lower()}")
+    console.print(f"[green]Assigned node:[/green] {resource} -> {name.strip().lower()}")
 
 
 @role_app.command("unassign")
-def role_unassign_command(name: str = typer.Argument(..., help="Group name.")) -> None:
-    """Remove one role-group assignment from the current node."""
-    unassign_group(name)
-    console.print(f"[green]Removed current-node assignment:[/green] {name.strip().lower()}")
+def role_unassign_command(
+    resource: str = typer.Argument(..., help="Resource path such as host.app."),
+    name: str = typer.Argument(..., help="Group name."),
+) -> None:
+    """Remove one role-group assignment from one registered node."""
+    try:
+        unassign_node_role_group(resource, name)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    console.print(f"[green]Removed node assignment:[/green] {resource} from {name.strip().lower()}")
 
 
 @state_app.command("show")
-def state_show_command() -> None:
-    """Show current-node state values."""
-    states = list_states()
+def state_show_command(resource: str = typer.Argument(..., help="Resource path such as host.app.")) -> None:
+    """Show saved state values for one registered node."""
+    node = find_node(resource)
+    if node is None:
+        raise typer.BadParameter(f"unknown node: {resource}")
+    states = node.states
     if not states:
         console.print("[yellow]No state values saved yet.[/yellow]")
         return
@@ -650,22 +669,29 @@ def state_show_command() -> None:
 
 @state_app.command("set")
 def state_set_command(
+    resource: str = typer.Argument(..., help="Resource path such as host.app."),
     key: str = typer.Argument(..., help="State key."),
     value: str = typer.Argument(..., help="State value."),
 ) -> None:
-    """Set one current-node state value."""
+    """Set one saved state value on one registered node."""
     try:
-        set_state_value(key, value)
+        set_node_state(resource, key, value)
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
-    console.print(f"[green]Set state:[/green] {key}={value}")
+    console.print(f"[green]Set state:[/green] {resource} {key}={value}")
 
 
 @state_app.command("unset")
-def state_unset_command(key: str = typer.Argument(..., help="State key.")) -> None:
-    """Remove one current-node state value."""
-    unset_state_value(key)
-    console.print(f"[green]Removed state:[/green] {key}")
+def state_unset_command(
+    resource: str = typer.Argument(..., help="Resource path such as host.app."),
+    key: str = typer.Argument(..., help="State key."),
+) -> None:
+    """Remove one saved state value from one registered node."""
+    try:
+        unset_node_state(resource, key)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    console.print(f"[green]Removed state:[/green] {resource} {key}")
 
 
 @package_app.command("status")

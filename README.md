@@ -36,6 +36,9 @@ On the control node:
 homebase init
 homebase node scan
 homebase node add
+homebase role add host-node --template host
+homebase role assign host.app host-node
+homebase state set host.app status active
 ```
 
 On a managed node:
@@ -69,11 +72,34 @@ homebase package update host.app
 
 What they do:
 
-- `versions`: list available GitHub releases or tags with short notes
+- `versions`: list installable GitHub refs such as releases, tags, or the default branch
 - `status`: show what is installed on the current node
 - `status <resource>`: ask a paired node what is installed there
 - `install`: install a specific branch, tag, or commit
 - `update`: move to the latest release, or the default branch if no release exists
+
+## Role And State Commands
+
+`homebase role` defines reusable groups and assigns them to registered nodes.
+
+```bash
+homebase role templates
+homebase role add host-node --template host
+homebase role add app-tier --template service
+homebase role link host-node app-tier
+homebase role assign host.app app-tier
+homebase role status
+homebase role status host.app
+```
+
+`homebase state` stores simple key/value labels on registered nodes.
+
+```bash
+homebase state set host.app status active
+homebase state set host.app site home
+homebase state show host.app
+homebase state unset host.app site
+```
 
 ## Repository Layout
 
