@@ -453,6 +453,7 @@ def remove_role_group(name: str, path: Path | None = None) -> None:
             name=node.name,
             parent=node.parent,
             kind=node.kind,
+            runtime_role=node.runtime_role,
             address=node.address,
             ssh_user=node.ssh_user,
             description=node.description,
@@ -468,6 +469,70 @@ def remove_role_group(name: str, path: Path | None = None) -> None:
         for node in load_nodes(path)
     )
     _save_registry(nodes, filtered, path)
+
+
+def rename_role_group(name: str, new_name: str, path: Path | None = None) -> RoleGroup:
+    """Rename one role group and update links and node assignments."""
+    normalized_name = name.strip()
+    normalized_new_name = new_name.strip()
+    if not normalized_new_name:
+        raise ValueError("new group name cannot be empty")
+    groups = load_role_groups(path)
+    current = next((group for group in groups if group.name == normalized_name), None)
+    if current is None:
+        raise ValueError(f"unknown group: {normalized_name}")
+    if normalized_new_name != normalized_name and any(group.name == normalized_new_name for group in groups):
+        raise ValueError(f"group already exists: {normalized_new_name}")
+    updated_groups: list[RoleGroup] = []
+    renamed: RoleGroup | None = None
+    for group in groups:
+        group_name = normalized_new_name if group.name == normalized_name else group.name
+        members = tuple(normalized_new_name if member == normalized_name else member for member in group.members)
+        rebuilt = RoleGroup(name=group_name, description=group.description, members=members)
+        if group.name == normalized_name:
+            renamed = rebuilt
+        updated_groups.append(rebuilt)
+    updated_nodes = tuple(
+        Node(
+            name=node.name,
+            parent=node.parent,
+            kind=node.kind,
+            runtime_role=node.runtime_role,
+            address=node.address,
+            ssh_user=node.ssh_user,
+            description=node.description,
+            runtime_hostname=node.runtime_hostname,
+            node_id=node.node_id,
+            platform=node.platform,
+            client_port=node.client_port,
+            open_ports=node.open_ports,
+            services=node.services,
+            role_groups=tuple(normalized_new_name if item == normalized_name else item for item in node.role_groups),
+            states=node.states,
+        )
+        for node in load_nodes(path)
+    )
+    _save_registry(updated_nodes, tuple(updated_groups), path)
+    assert renamed is not None
+    return renamed
+
+
+def set_role_group_description(name: str, description: str, path: Path | None = None) -> RoleGroup:
+    """Set one role group description."""
+    normalized_name = name.strip()
+    groups = load_role_groups(path)
+    updated_groups: list[RoleGroup] = []
+    updated: RoleGroup | None = None
+    for group in groups:
+        if group.name != normalized_name:
+            updated_groups.append(group)
+            continue
+        updated = RoleGroup(name=group.name, description=description.strip(), members=group.members)
+        updated_groups.append(updated)
+    if updated is None:
+        raise ValueError(f"unknown group: {normalized_name}")
+    save_role_groups(tuple(updated_groups), path)
+    return updated
 
 
 def link_role_group(parent: str, child: str, path: Path | None = None) -> None:
@@ -534,6 +599,7 @@ def assign_node_role_group(node_name: str, group_name: str, path: Path | None = 
         name=node.name,
         parent=node.parent,
         kind=node.kind,
+        runtime_role=node.runtime_role,
         address=node.address,
         ssh_user=node.ssh_user,
         description=node.description,
@@ -560,6 +626,7 @@ def unassign_node_role_group(node_name: str, group_name: str, path: Path | None 
         name=node.name,
         parent=node.parent,
         kind=node.kind,
+        runtime_role=node.runtime_role,
         address=node.address,
         ssh_user=node.ssh_user,
         description=node.description,
@@ -592,6 +659,7 @@ def set_node_state(node_name: str, key: str, value: str, path: Path | None = Non
         name=node.name,
         parent=node.parent,
         kind=node.kind,
+        runtime_role=node.runtime_role,
         address=node.address,
         ssh_user=node.ssh_user,
         description=node.description,
@@ -620,6 +688,7 @@ def unset_node_state(node_name: str, key: str, path: Path | None = None) -> Node
         name=node.name,
         parent=node.parent,
         kind=node.kind,
+        runtime_role=node.runtime_role,
         address=node.address,
         ssh_user=node.ssh_user,
         description=node.description,

@@ -46,7 +46,9 @@ from homebase_cli.registry import (
     load_nodes,
     load_role_groups,
     rename_node,
+    rename_role_group,
     remove_role_group,
+    set_role_group_description,
     set_node_runtime_role,
     set_node_state,
     unassign_node_role_group,
@@ -78,7 +80,8 @@ app = typer.Typer(no_args_is_help=True, help="Manage homebase control and client
 node_app = typer.Typer(help="Scan for clients and inspect registered nodes.")
 ansible_app = typer.Typer(help="Run ansible-related helper commands.")
 client_app = typer.Typer(help="Run the homebase client service on one managed node.")
-role_app = typer.Typer(invoke_without_command=True, help="Inspect and manage registered node type and group assignments.")
+role_app = typer.Typer(invoke_without_command=True, help="Show or change the local node role.")
+inventory_app = typer.Typer(invoke_without_command=True, help="Inspect and manage registered nodes and groups.")
 state_app = typer.Typer(invoke_without_command=True, help="Store and inspect saved state values for registered nodes.")
 package_app = typer.Typer(
     invoke_without_command=True,
@@ -155,6 +158,21 @@ def _group_roots() -> list[str]:
     return sorted(roots)
 
 
+def _resolve_local_node_name() -> str:
+    node_name = _current_node_name()
+    if not node_name:
+        raise typer.BadParameter("local node name is not set; run `homebase init` first")
+    return node_name
+
+
+def _resolve_inventory_node_target(resource: str | None) -> str:
+    return resource.strip() if resource is not None else _resolve_local_node_name()
+
+
+def _count_actions(*values: object) -> int:
+    return sum(1 for value in values if value not in (None, False, ""))
+
+
 def _render_group_tree(name: str, index: dict[str, object], rows: list[tuple[str, str]], depth: int = 0, seen: set[str] | None = None) -> None:
     if seen is None:
         seen = set()
@@ -174,6 +192,15 @@ def _render_group_tree(name: str, index: dict[str, object], rows: list[tuple[str
 @role_app.callback()
 def role_callback(ctx: typer.Context) -> None:
     """Show standard help when role is called without a subcommand."""
+    if ctx.invoked_subcommand is not None:
+        return
+    console.print(ctx.get_help())
+    raise typer.Exit(code=0)
+
+
+@inventory_app.callback()
+def inventory_callback(ctx: typer.Context) -> None:
+    """Show standard help when inventory is called without a subcommand."""
     if ctx.invoked_subcommand is not None:
         return
     console.print(ctx.get_help())
@@ -526,25 +553,56 @@ def init_command(
     console.print(f"[green]Registered local node name:[/green] {local_node.name}")
 
 
-@role_app.command("status")
-def role_status_command(resource: str | None = typer.Argument(None, help="Optional resource path such as host.app.")) -> None:
-    """Show registered node type and group assignments."""
+@role_app.command("show")
+def role_show_command() -> None:
+    """Show the local node role and registered local node name."""
+    settings = load_settings()
+    console.print(f"role: {settings.role or 'not set'}")
+    console.print(f"node: {settings.node_name or 'not set'}")
+
+
+@role_app.command("set")
+def role_set_command(
+    runtime_role: str = typer.Argument(..., help="control or managed."),
+) -> None:
+    """Set the local node role to control or managed."""
+    try:
+        updated = set_role(runtime_role)
+        local_name = _current_node_name()
+        if local_name:
+            ensure_local_node(local_name, updated.role or "managed", runtime_hostname=socket.gethostname())
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    console.print(f"[green]Set local node type to {updated.role}[/green]")
+
+
+@inventory_app.command("list")
+def inventory_list_command(target: str | None = typer.Argument(None, help="Optional node or group name.")) -> None:
+    """List registered nodes and groups, or show one node or group."""
     _require_role("control")
     groups = load_role_groups()
-    if resource is not None:
-        node = find_node(resource)
-        if node is None:
-            raise typer.BadParameter(f"unknown node: {resource}")
-        console.print(f"[bold]Node role status: {node.name}[/bold]")
-        console.print(f"type: {node.runtime_role}")
-        console.print(f"groups: {', '.join(node.role_groups) if node.role_groups else 'none'}")
-        if node.parent:
-            console.print(f"parent: {node.parent}")
-        console.print(f"kind: {node.kind}")
+    nodes = load_nodes()
+    if target is not None:
+        node = find_node(target)
+        if node is not None:
+            console.print(f"[bold]Node: {node.name}[/bold]")
+            console.print(f"type: {node.runtime_role}")
+            console.print(f"groups: {', '.join(node.role_groups) if node.role_groups else 'none'}")
+            if node.parent:
+                console.print(f"parent: {node.parent}")
+            console.print(f"kind: {node.kind}")
+            return
+        group = next((item for item in groups if item.name == target.strip()), None)
+        if group is None:
+            raise typer.BadParameter(f"unknown node or group: {target}")
+        assigned_nodes = [node.name for node in nodes if group.name in node.role_groups]
+        console.print(f"[bold]Group: {group.name}[/bold]")
+        console.print(f"members: {', '.join(group.members) if group.members else 'none'}")
+        console.print(f"assigned nodes: {', '.join(assigned_nodes) if assigned_nodes else 'none'}")
+        console.print(f"description: {group.description or 'none'}")
         return
 
-    console.print("[bold]Registered node roles[/bold]")
-    nodes = load_nodes()
+    console.print("[bold]Registered nodes[/bold]")
     if not nodes:
         current_name = _current_node_name()
         current_role = _current_runtime_role()
@@ -567,149 +625,140 @@ def role_status_command(resource: str | None = typer.Argument(None, help="Option
             label = f"{node.name} (local)" if current_name and node.name == current_name else node.name
             table.add_row(label, node.runtime_role, ", ".join(node.role_groups) if node.role_groups else "")
         console.print(table)
+
+    console.print("\n[bold]Defined groups[/bold]")
     if not groups:
         console.print("defined groups: none")
         return
-    rows: list[tuple[str, str]] = []
-    index = _group_index()
-    for root_name in _group_roots():
-        _render_group_tree(root_name, index, rows)
-    if not rows:
-        rows = [(group.name, "group") for group in groups]
-    console.print("group tree:")
-    print_node_tree(rows)
-
-
-@role_app.command("assign")
-def role_assign_command(
-    resource: str = typer.Argument(..., help="Resource path such as host.app."),
-    name: str = typer.Argument(..., help="Group name."),
-) -> None:
-    """Assign one registered node to one role group."""
-    _require_role("control")
-    try:
-        assign_node_role_group(resource, name)
-    except ValueError as exc:
-        raise typer.BadParameter(str(exc)) from exc
-    console.print(f"[green]Assigned node:[/green] {resource} -> {name.strip().lower()}")
-
-
-@role_app.command("unassign")
-def role_unassign_command(
-    resource: str = typer.Argument(..., help="Resource path such as host.app."),
-    name: str = typer.Argument(..., help="Group name."),
-) -> None:
-    """Remove one role-group assignment from one registered node."""
-    _require_role("control")
-    try:
-        unassign_node_role_group(resource, name)
-    except ValueError as exc:
-        raise typer.BadParameter(str(exc)) from exc
-    console.print(f"[green]Removed node assignment:[/green] {resource} from {name.strip().lower()}")
-
-
-@role_app.command("set-type")
-def role_set_type_command(
-    resource: str = typer.Argument(..., help="Resource path such as host.app."),
-    runtime_role: str = typer.Argument(..., help="control or managed."),
-) -> None:
-    """Set one registered node type to control or managed."""
-    _require_role("control")
-    try:
-        node = set_node_runtime_role(resource, runtime_role)
-    except ValueError as exc:
-        raise typer.BadParameter(str(exc)) from exc
-    console.print(f"[green]Set node type:[/green] {node.name} -> {node.runtime_role}")
-
-
-@role_app.command("rename")
-def role_rename_command(
-    resource: str = typer.Argument(..., help="Current resource path such as host.app."),
-    new_name: str = typer.Argument(..., help="New resource path."),
-) -> None:
-    """Rename one registered node."""
-    _require_role("control")
-    try:
-        node = rename_node(resource, new_name)
-        if _current_node_name() == resource:
-            set_node_name(node.name)
-    except ValueError as exc:
-        raise typer.BadParameter(str(exc)) from exc
-    console.print(f"[green]Renamed node:[/green] {resource} -> {node.name}")
-
-
-@role_app.command("list")
-def role_list_command() -> None:
-    """List defined role groups."""
-    _require_role("control")
-    groups = load_role_groups()
-    if not groups:
-        console.print("[yellow]No role groups defined yet.[/yellow]")
-        return
     table = Table(show_header=True, header_style="bold")
-    table.add_column("Name")
+    table.add_column("Group")
     table.add_column("Members")
     table.add_column("Description")
     for group in groups:
-        table.add_row(
-            group.name,
-            ", ".join(group.members) if group.members else "",
-            group.description,
-        )
+        table.add_row(group.name, ", ".join(group.members) if group.members else "", group.description)
     console.print(table)
 
 
-@role_app.command("group-add")
-def role_group_add_command(
-    name: str = typer.Argument(..., help="Group name such as host-node or client-group."),
-    description: str = typer.Option("", "--description", help="Short description."),
+@inventory_app.command("name")
+def inventory_name_command(
+    target: str | None = typer.Argument(None, help="Optional node name. Defaults to the local node."),
+    edit: str | None = typer.Option(None, "--edit", help="New node name."),
 ) -> None:
-    """Add one role group definition."""
+    """Show or edit one registered node name."""
     _require_role("control")
+    resource = _resolve_inventory_node_target(target)
+    node = find_node(resource)
+    if node is None:
+        raise typer.BadParameter(f"unknown node: {resource}")
+    if edit is None:
+        console.print(node.name)
+        return
     try:
-        add_role_group(name=name, description=description)
+        renamed = rename_node(node.name, edit)
+        if _current_node_name() == node.name:
+            set_node_name(renamed.name)
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
-    console.print(f"[green]Added role group:[/green] {name.strip().lower()}")
+    console.print(f"[green]Renamed node:[/green] {node.name} -> {renamed.name}")
 
 
-@role_app.command("group-remove")
-def role_group_remove_command(name: str = typer.Argument(..., help="Group name.")) -> None:
-    """Remove one role group definition."""
+@inventory_app.command("type")
+def inventory_type_command(
+    target: str | None = typer.Argument(None, help="Optional node name. Defaults to the local node."),
+    edit: str | None = typer.Option(None, "--edit", help="New node type: control or managed."),
+) -> None:
+    """Show or edit one registered node type."""
     _require_role("control")
+    resource = _resolve_inventory_node_target(target)
+    node = find_node(resource)
+    if node is None:
+        raise typer.BadParameter(f"unknown node: {resource}")
+    if edit is None:
+        console.print(node.runtime_role)
+        return
     try:
-        remove_role_group(name)
+        updated = set_node_runtime_role(resource, edit)
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
-    console.print(f"[green]Removed role group:[/green] {name.strip().lower()}")
+    console.print(f"[green]Set node type:[/green] {updated.name} -> {updated.runtime_role}")
 
 
-@role_app.command("group-link")
-def role_group_link_command(
+@inventory_app.command("group")
+def inventory_group_command(
+    add: str | None = typer.Option(None, "--add", help="Add one group."),
+    remove: str | None = typer.Option(None, "--remove", help="Remove one group."),
+    edit: str | None = typer.Option(None, "--edit", help="Edit one existing group."),
+    to: str | None = typer.Option(None, "--to", help="New group name when editing."),
+    description: str | None = typer.Option(None, "--description", help="Group description when adding or editing."),
+) -> None:
+    """Add, remove, or edit one group."""
+    _require_role("control")
+    action_count = _count_actions(add, remove, edit)
+    if action_count != 1:
+        raise typer.BadParameter("choose exactly one action: --add, --remove, or --edit")
+    try:
+        if add is not None:
+            group = add_role_group(name=add, description=description or "")
+            console.print(f"[green]Added group:[/green] {group.name}")
+            return
+        if remove is not None:
+            remove_role_group(remove)
+            console.print(f"[green]Removed group:[/green] {remove.strip().lower()}")
+            return
+        assert edit is not None
+        current_name = edit.strip()
+        updated_name = current_name
+        if to is not None:
+            updated_name = rename_role_group(current_name, to).name
+        if description is not None:
+            updated_name = set_role_group_description(updated_name, description).name
+        console.print(f"[green]Updated group:[/green] {updated_name}")
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+
+@inventory_app.command("link")
+def inventory_link_command(
     parent: str = typer.Argument(..., help="Parent group name."),
     child: str = typer.Argument(..., help="Child group name."),
+    add: bool = typer.Option(False, "--add", help="Add the link."),
+    remove: bool = typer.Option(False, "--remove", help="Remove the link."),
 ) -> None:
-    """Link one child group under one parent group."""
+    """Add or remove one group-to-group link."""
     _require_role("control")
+    if add == remove:
+        raise typer.BadParameter("choose exactly one action: --add or --remove")
     try:
-        link_role_group(parent, child)
+        if add:
+            link_role_group(parent, child)
+            console.print(f"[green]Linked group:[/green] {child.strip().lower()} -> {parent.strip().lower()}")
+        else:
+            unlink_role_group(parent, child)
+            console.print(f"[green]Unlinked group:[/green] {child.strip().lower()} from {parent.strip().lower()}")
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
-    console.print(f"[green]Linked group:[/green] {child.strip().lower()} -> {parent.strip().lower()}")
 
 
-@role_app.command("group-unlink")
-def role_group_unlink_command(
-    parent: str = typer.Argument(..., help="Parent group name."),
-    child: str = typer.Argument(..., help="Child group name."),
+@inventory_app.command("assign")
+def inventory_assign_command(
+    resource: str = typer.Argument(..., help="Resource path such as host.app."),
+    group: str = typer.Argument(..., help="Group name."),
+    add: bool = typer.Option(False, "--add", help="Add the assignment."),
+    remove: bool = typer.Option(False, "--remove", help="Remove the assignment."),
 ) -> None:
-    """Remove one child group link from one parent group."""
+    """Add or remove one node-to-group assignment."""
     _require_role("control")
+    if add == remove:
+        raise typer.BadParameter("choose exactly one action: --add or --remove")
     try:
-        unlink_role_group(parent, child)
+        if add:
+            assign_node_role_group(resource, group)
+            console.print(f"[green]Assigned node:[/green] {resource} -> {group.strip().lower()}")
+        else:
+            unassign_node_role_group(resource, group)
+            console.print(f"[green]Removed node assignment:[/green] {resource} from {group.strip().lower()}")
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
-    console.print(f"[green]Unlinked group:[/green] {child.strip().lower()} from {parent.strip().lower()}")
 
 
 @state_app.command("show")
@@ -1055,9 +1104,10 @@ def _build_dev_app() -> typer.Typer:
 def _build_root_app() -> typer.Typer:
     runtime_app = typer.Typer(no_args_is_help=True, help="Manage homebase control and managed nodes.")
     runtime_app.command("init")(init_command)
+    runtime_app.add_typer(role_app, name="role")
     current_role = _current_runtime_role()
     if current_role in (None, "control"):
-        runtime_app.add_typer(role_app, name="role")
+        runtime_app.add_typer(inventory_app, name="inventory")
         runtime_app.add_typer(state_app, name="state")
         runtime_app.add_typer(_build_node_app(), name="node")
     if current_role in (None, "managed"):

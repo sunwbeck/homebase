@@ -36,8 +36,8 @@ On the control node:
 homebase init
 homebase node scan
 homebase node add
-homebase role group-add host-node
-homebase role assign host.app host-node
+homebase inventory group --add host-node
+homebase inventory assign host.app host-node --add
 homebase state set host.app status active
 ```
 
@@ -80,19 +80,19 @@ What they do:
 - `install`: install a specific branch, tag, or commit
 - `update`: move to the latest release, or the default branch if no release exists
 
-## Role And State Commands
+## Inventory And State Commands
 
-`homebase role` defines reusable groups and assigns registered nodes to them.
+`homebase inventory` manages registered node names, node types, groups, links, and assignments.
 
 ```bash
-homebase role status
-homebase role group-add host-node
-homebase role group-add app-tier
-homebase role group-link host-node app-tier
-homebase role assign host.app app-tier
-homebase role status host.app
-homebase role set-type host.app managed
-homebase role rename host.app host.api
+homebase inventory list
+homebase inventory list host.app
+homebase inventory group --add host-node
+homebase inventory group --add app-tier
+homebase inventory link host-node app-tier --add
+homebase inventory assign host.app app-tier --add
+homebase inventory type host.app --edit managed
+homebase inventory name host.app --edit host.api
 ```
 
 `homebase state` stores simple key/value labels on registered nodes.

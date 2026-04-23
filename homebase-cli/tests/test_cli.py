@@ -136,20 +136,20 @@ def test_init_interactive_can_choose_managed(monkeypatch) -> None:
         assert "Registered local node name: app" in result.stdout
 
 
-def test_init_registers_local_node_and_role_status_shows_it(monkeypatch) -> None:
+def test_init_registers_local_node_and_inventory_list_shows_it(monkeypatch) -> None:
     runner = CliRunner()
     with runner.isolated_filesystem():
         env = {"HOMEBASE_SETTINGS_PATH": "settings.toml", "HOMEBASE_REGISTRY_PATH": "nodes.toml"}
         app = load_app(monkeypatch, "settings.toml")
         init_result = runner.invoke(app, ["init", "--role", "control", "--name", "control"], env=env)
         assert init_result.exit_code == 0
-        status_result = runner.invoke(app, ["role", "status"], env=env)
+        status_result = runner.invoke(app, ["inventory", "list"], env=env)
         assert status_result.exit_code == 0
         assert "control (local)" in status_result.stdout
         assert "control" in status_result.stdout
 
 
-def test_role_group_commands_build_hierarchy(monkeypatch) -> None:
+def test_inventory_group_commands_build_hierarchy(monkeypatch) -> None:
     runner = CliRunner()
     with runner.isolated_filesystem():
         env = {"HOMEBASE_SETTINGS_PATH": "settings.toml", "HOMEBASE_REGISTRY_PATH": "nodes.toml"}
@@ -159,44 +159,44 @@ def test_role_group_commands_build_hierarchy(monkeypatch) -> None:
             encoding="utf-8",
         )
         app = load_app(monkeypatch, "settings.toml")
-        assert runner.invoke(app, ["role", "group-add", "host-node"], env=env).exit_code == 0
-        assert runner.invoke(app, ["role", "group-add", "app-tier"], env=env).exit_code == 0
-        assert runner.invoke(app, ["role", "group-link", "host-node", "app-tier"], env=env).exit_code == 0
-        assert runner.invoke(app, ["role", "assign", "host.app", "app-tier"], env=env).exit_code == 0
-        status_result = runner.invoke(app, ["role", "status", "host.app"], env=env)
+        assert runner.invoke(app, ["inventory", "group", "--add", "host-node"], env=env).exit_code == 0
+        assert runner.invoke(app, ["inventory", "group", "--add", "app-tier"], env=env).exit_code == 0
+        assert runner.invoke(app, ["inventory", "link", "host-node", "app-tier", "--add"], env=env).exit_code == 0
+        assert runner.invoke(app, ["inventory", "assign", "host.app", "app-tier", "--add"], env=env).exit_code == 0
+        status_result = runner.invoke(app, ["inventory", "list", "host.app"], env=env)
         assert status_result.exit_code == 0
         assert "type: managed" in status_result.stdout
         assert "app-tier" in status_result.stdout
-        tree_result = runner.invoke(app, ["role", "status"], env=env)
-        assert "Registered node roles" in tree_result.stdout
+        tree_result = runner.invoke(app, ["inventory", "list"], env=env)
+        assert "Registered nodes" in tree_result.stdout
         assert "managed" in tree_result.stdout
         assert "host-node" in tree_result.stdout
         assert "app-tier" in tree_result.stdout
 
 
-def test_role_can_rename_node_and_set_type(monkeypatch) -> None:
+def test_inventory_can_rename_node_and_set_type(monkeypatch) -> None:
     runner = CliRunner()
     with runner.isolated_filesystem():
         env = {"HOMEBASE_SETTINGS_PATH": "settings.toml", "HOMEBASE_REGISTRY_PATH": "nodes.toml"}
         Path("settings.toml").write_text('role = "control"\n', encoding="utf-8")
         Path("nodes.toml").write_text('[[nodes]]\nname = "host.app"\nkind = "vm"\nruntime_role = "managed"\n', encoding="utf-8")
         app = load_app(monkeypatch, "settings.toml")
-        rename_result = runner.invoke(app, ["role", "rename", "host.app", "host.api"], env=env)
+        rename_result = runner.invoke(app, ["inventory", "name", "host.app", "--edit", "host.api"], env=env)
         assert rename_result.exit_code == 0
-        type_result = runner.invoke(app, ["role", "set-type", "host.api", "control"], env=env)
+        type_result = runner.invoke(app, ["inventory", "type", "host.api", "--edit", "control"], env=env)
         assert type_result.exit_code == 0
-        status_result = runner.invoke(app, ["role", "status", "host.api"], env=env)
+        status_result = runner.invoke(app, ["inventory", "list", "host.api"], env=env)
         assert "type: control" in status_result.stdout
 
 
-def test_role_rename_updates_local_node_name(monkeypatch) -> None:
+def test_inventory_name_updates_local_node_name(monkeypatch) -> None:
     runner = CliRunner()
     with runner.isolated_filesystem():
         env = {"HOMEBASE_SETTINGS_PATH": "settings.toml", "HOMEBASE_REGISTRY_PATH": "nodes.toml"}
         Path("settings.toml").write_text('role = "control"\nnode_name = "host.app"\n', encoding="utf-8")
         Path("nodes.toml").write_text('[[nodes]]\nname = "host.app"\nkind = "vm"\nruntime_role = "managed"\n', encoding="utf-8")
         app = load_app(monkeypatch, "settings.toml")
-        result = runner.invoke(app, ["role", "rename", "host.app", "host.api"], env=env)
+        result = runner.invoke(app, ["inventory", "name", "host.app", "--edit", "host.api"], env=env)
         assert result.exit_code == 0
         assert 'node_name = "host.api"' in Path("settings.toml").read_text(encoding="utf-8")
 
@@ -412,6 +412,7 @@ def test_root_help_for_control_uses_control_workflow(monkeypatch) -> None:
     output = result.stdout
     assert "│ init" in output
     assert "│ role" in output
+    assert "│ inventory" in output
     assert "│ state" in output
     assert "│ node" in output
     assert "│ package" in output
@@ -430,10 +431,11 @@ def test_root_help_for_managed_hides_control_commands(monkeypatch) -> None:
     assert result.exit_code == 0
     output = result.stdout
     assert "│ init" in output
+    assert "│ role" in output
     assert "│ client" in output
     assert "│ package" in output
     assert "│ dev" in output
-    assert "│ role" not in output
+    assert "│ inventory" not in output
     assert "│ state" not in output
     assert "│ node" not in output
 
@@ -481,32 +483,30 @@ def test_node_help_uses_registry_workflow_order(monkeypatch) -> None:
     ]
 
 
-def test_role_help_uses_group_management_workflow(monkeypatch) -> None:
+def test_role_help_uses_local_role_workflow(monkeypatch) -> None:
     runner = CliRunner()
     app = load_app(monkeypatch)
     result = runner.invoke(app, ["role", "--help"])
     assert result.exit_code == 0
     output = result.stdout
-    command_lines = [line for line in output.splitlines() if line.strip().startswith(("│ status", "│ assign", "│ unassign", "│ set-type", "│ rename", "│ list", "│ group-add", "│ group-remove", "│ group-link", "│ group-unlink"))]
-    assert command_lines == [
-        "│ status         Show registered node type and group assignments.              │",
-        "│ assign         Assign one registered node to one role group.                 │",
-        "│ unassign       Remove one role-group assignment from one registered node.    │",
-        "│ set-type       Set one registered node type to control or managed.           │",
-        "│ rename         Rename one registered node.                                   │",
-        "│ list           List defined role groups.                                     │",
-        "│ group-add      Add one role group definition.                                │",
-        "│ group-remove   Remove one role group definition.                             │",
-        "│ group-link     Link one child group under one parent group.                  │",
-        "│ group-unlink   Remove one child group link from one parent group.            │",
-    ]
-    assert "group-add" in output
-    assert "group-remove" in output
-    assert "group-link" in output
-    assert "group-unlink" in output
+    assert "show" in output
+    assert "registered local node name" in output
+    assert "set" in output
+    assert "control or managed" in output
+
+
+def test_inventory_help_uses_inventory_workflow(monkeypatch) -> None:
+    runner = CliRunner()
+    app = load_app(monkeypatch)
+    result = runner.invoke(app, ["inventory", "--help"])
+    assert result.exit_code == 0
+    output = result.stdout
+    assert "list" in output
+    assert "name" in output
+    assert "type" in output
+    assert "group" in output
+    assert "link" in output
     assert "assign" in output
-    assert "unassign" in output
-    assert "templates" not in output
 
 
 def test_state_help_uses_simple_state_commands(monkeypatch) -> None:
