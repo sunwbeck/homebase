@@ -15,6 +15,7 @@ from homebase_cli.client import (
     DEFAULT_CLIENT_PORT,
     DISCOVERY_PATH,
     PACKAGE_INSTALL_PATH,
+    PACKAGE_PROGRESS_PATH,
     PACKAGE_STATUS_PATH,
     PACKAGE_UPGRADE_PATH,
     PAIR_PATH,
@@ -278,12 +279,41 @@ def fetch_package_status(
         return None
 
 
+def fetch_package_progress(
+    address: str,
+    *,
+    job_id: str,
+    port: int = DEFAULT_CLIENT_PORT,
+    timeout: float = 1.0,
+    controller_id: str | None = None,
+) -> dict[str, object] | None:
+    """Fetch current package job progress from one paired client."""
+    result = _http_request(
+        "GET",
+        address,
+        f"{PACKAGE_PROGRESS_PATH}?job_id={job_id}",
+        port=port,
+        timeout=timeout,
+        headers={"X-Homebase-Controller": controller_id or local_controller_id()},
+    )
+    if result is None:
+        return None
+    status, body = result
+    if status != 200:
+        return None
+    try:
+        return json.loads(body)
+    except json.JSONDecodeError:
+        return None
+
+
 def request_package_install(
     address: str,
     *,
     ref: str,
     repo_url: str,
     summary: str | None = None,
+    job_id: str | None = None,
     port: int = DEFAULT_CLIENT_PORT,
     timeout: float = 60.0,
     controller_id: str | None = None,
@@ -292,6 +322,8 @@ def request_package_install(
     payload = {"ref": ref, "repo_url": repo_url}
     if summary:
         payload["summary"] = summary
+    if job_id:
+        payload["job_id"] = job_id
     result = _http_request(
         "POST",
         address,
@@ -320,6 +352,7 @@ def request_package_upgrade(
     *,
     repo_url: str,
     include_prerelease: bool = False,
+    job_id: str | None = None,
     port: int = DEFAULT_CLIENT_PORT,
     timeout: float = 60.0,
     controller_id: str | None = None,
@@ -335,7 +368,13 @@ def request_package_upgrade(
             "Content-Type": "application/json",
             "X-Homebase-Controller": controller_id or local_controller_id(),
         },
-        body=json.dumps({"repo_url": repo_url, "include_prerelease": include_prerelease}),
+        body=json.dumps(
+            {
+                "repo_url": repo_url,
+                "include_prerelease": include_prerelease,
+                **({"job_id": job_id} if job_id else {}),
+            }
+        ),
     )
     if result is None:
         return None

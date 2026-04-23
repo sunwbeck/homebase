@@ -18,6 +18,7 @@ import shutil
 import socket
 import subprocess
 from typing import Any
+from urllib.parse import parse_qs, urlparse
 
 from homebase_cli.packaging import DEFAULT_REPO_URL, load_install_state, install_github_ref, latest_github_version
 from homebase_cli.paths import LOCAL_CLI_ROOT
@@ -32,11 +33,13 @@ HEALTH_PATH = "/health"
 PACKAGE_STATUS_PATH = "/package/status"
 PACKAGE_INSTALL_PATH = "/package/install"
 PACKAGE_UPGRADE_PATH = "/package/upgrade"
+PACKAGE_PROGRESS_PATH = "/package/progress"
 SERVICE_START_PATH = "/service/start"
 SERVICE_STOP_PATH = "/service/stop"
 CLIENT_STATE_PATH = Path.home() / ".config" / "homebase" / "client-state.json"
 CONNECT_RUNTIME_PATH = LOCAL_CLI_ROOT / "run" / "connect-server.json"
 CONNECT_LOG_PATH = LOCAL_CLI_ROOT / "logs" / "connect-server.log"
+PACKAGE_JOB_DIR = LOCAL_CLI_ROOT / "run" / "package-jobs"
 
 
 @dataclass(frozen=True)
@@ -104,6 +107,7 @@ class PackageInstallRequest:
     repo_url: str = DEFAULT_REPO_URL
     ref: str = "main"
     include_prerelease: bool = False
+    job_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -1047,9 +1051,34 @@ def parse_package_install_request(payload: dict[str, Any]) -> PackageInstallRequ
     repo_url = str(payload.get("repo_url", DEFAULT_REPO_URL)).strip() or DEFAULT_REPO_URL
     ref = str(payload.get("ref", "")).strip()
     include_prerelease = bool(payload.get("include_prerelease", False))
+    job_id = str(payload.get("job_id", "")).strip() or None
     if not ref:
         raise ValueError("package install request is missing ref")
-    return PackageInstallRequest(repo_url=repo_url, ref=ref, include_prerelease=include_prerelease)
+    return PackageInstallRequest(repo_url=repo_url, ref=ref, include_prerelease=include_prerelease, job_id=job_id)
+
+
+def _package_job_path(job_id: str) -> Path:
+    """Return the persisted package job path for one id."""
+    safe = re.sub(r"[^A-Za-z0-9._-]", "-", job_id.strip())
+    if not safe:
+        raise ValueError("job id cannot be empty")
+    return PACKAGE_JOB_DIR / f"{safe}.json"
+
+
+def save_package_job_state(job_id: str, payload: dict[str, Any]) -> Path:
+    """Persist one package job state payload."""
+    target = _package_job_path(job_id)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return target
+
+
+def load_package_job_state(job_id: str) -> dict[str, Any] | None:
+    """Load one package job state when present."""
+    target = _package_job_path(job_id)
+    if not target.exists():
+        return None
+    return json.loads(target.read_text(encoding="utf-8"))
 
 
 def _require_paired_controller(headers: Any) -> str | None:
@@ -1073,7 +1102,9 @@ def make_handler() -> type[BaseHTTPRequestHandler]:
             self.wfile.write(body)
 
         def do_GET(self) -> None:  # noqa: N802
-            if self.path == HEALTH_PATH:
+            parsed = urlparse(self.path)
+            path = parsed.path
+            if path == HEALTH_PATH:
                 body = b"ok\n"
                 self.send_response(HTTPStatus.OK)
                 self.send_header("Content-Type", "text/plain; charset=utf-8")
@@ -1081,25 +1112,41 @@ def make_handler() -> type[BaseHTTPRequestHandler]:
                 self.end_headers()
                 self.wfile.write(body)
                 return
-            if self.path == DISCOVERY_PATH:
+            if path == DISCOVERY_PATH:
                 self._send_json(discovery_payload())
                 return
-            if self.path == PROFILE_PATH:
+            if path == PROFILE_PATH:
                 if _require_paired_controller(self.headers) is None:
                     self._send_json({"error": "not paired"}, status=HTTPStatus.FORBIDDEN)
                     return
                 self._send_json(profile_payload())
                 return
-            if self.path == PACKAGE_STATUS_PATH:
+            if path == PACKAGE_STATUS_PATH:
                 if _require_paired_controller(self.headers) is None:
                     self._send_json({"error": "not paired"}, status=HTTPStatus.FORBIDDEN)
                     return
                 self._send_json(package_status_payload())
                 return
+            if path == PACKAGE_PROGRESS_PATH:
+                if _require_paired_controller(self.headers) is None:
+                    self._send_json({"error": "not paired"}, status=HTTPStatus.FORBIDDEN)
+                    return
+                job_id = (parse_qs(parsed.query).get("job_id") or [""])[0].strip()
+                if not job_id:
+                    self._send_json({"error": "missing job id"}, status=HTTPStatus.BAD_REQUEST)
+                    return
+                payload = load_package_job_state(job_id)
+                if payload is None:
+                    self._send_json({"error": "unknown job"}, status=HTTPStatus.NOT_FOUND)
+                    return
+                self._send_json(payload)
+                return
             self.send_error(HTTPStatus.NOT_FOUND, "not found")
 
         def do_POST(self) -> None:  # noqa: N802
-            if self.path == PAIR_PATH:
+            parsed = urlparse(self.path)
+            path = parsed.path
+            if path == PAIR_PATH:
                 content_length = int(self.headers.get("Content-Length", "0"))
                 body = self.rfile.read(content_length).decode("utf-8") if content_length else "{}"
                 try:
@@ -1112,7 +1159,7 @@ def make_handler() -> type[BaseHTTPRequestHandler]:
                     return
                 self._send_json(profile_payload())
                 return
-            if self.path in {SERVICE_START_PATH, SERVICE_STOP_PATH}:
+            if path in {SERVICE_START_PATH, SERVICE_STOP_PATH}:
                 if _require_paired_controller(self.headers) is None:
                     self._send_json({"error": "not paired"}, status=HTTPStatus.FORBIDDEN)
                     return
@@ -1120,7 +1167,7 @@ def make_handler() -> type[BaseHTTPRequestHandler]:
                 body = self.rfile.read(content_length).decode("utf-8") if content_length else "{}"
                 try:
                     request = parse_service_action_request(json.loads(body) if body else {})
-                    action = "start" if self.path == SERVICE_START_PATH else "stop"
+                    action = "start" if path == SERVICE_START_PATH else "stop"
                     control_service(request.service, action)
                     self._send_json(profile_payload())
                 except (json.JSONDecodeError, ValueError) as exc:
@@ -1128,7 +1175,7 @@ def make_handler() -> type[BaseHTTPRequestHandler]:
                 except Exception as exc:
                     self._send_json({"error": str(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
                 return
-            if self.path not in {PACKAGE_INSTALL_PATH, PACKAGE_UPGRADE_PATH}:
+            if path not in {PACKAGE_INSTALL_PATH, PACKAGE_UPGRADE_PATH}:
                 self.send_error(HTTPStatus.NOT_FOUND, "not found")
                 return
             if _require_paired_controller(self.headers) is None:
@@ -1138,31 +1185,70 @@ def make_handler() -> type[BaseHTTPRequestHandler]:
             body = self.rfile.read(content_length).decode("utf-8") if content_length else "{}"
             payload = json.loads(body) if body else {}
             try:
-                if self.path == PACKAGE_UPGRADE_PATH:
+                if path == PACKAGE_UPGRADE_PATH:
                     repo_url = str(payload.get("repo_url", DEFAULT_REPO_URL)).strip() or DEFAULT_REPO_URL
                     include_prerelease = bool(payload.get("include_prerelease", False))
+                    job_id = str(payload.get("job_id", "")).strip() or secrets.token_hex(8)
+                    save_package_job_state(job_id, {"job_id": job_id, "step": 1, "total": 6, "label": "resolving latest target", "status": "running"})
                     latest = latest_github_version(repo_url, include_prerelease=include_prerelease)
                     request = PackageInstallRequest(
                         repo_url=repo_url,
                         ref=latest.ref,
                         include_prerelease=include_prerelease,
+                        job_id=job_id,
                     )
                     summary = latest.summary
                 else:
                     request = parse_package_install_request(payload)
                     summary = str(payload.get("summary", "")).strip() or None
+                    if request.job_id:
+                        save_package_job_state(request.job_id, {"job_id": request.job_id, "step": 1, "total": 6, "label": "accepted request", "status": "running"})
             except (json.JSONDecodeError, ValueError, RuntimeError) as exc:
                 self._send_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
                 return
             try:
+                def on_stage(step: int, total: int, label: str) -> None:
+                    if not request.job_id:
+                        return
+                    save_package_job_state(
+                        request.job_id,
+                        {"job_id": request.job_id, "step": step, "total": total, "label": label, "status": "running"},
+                    )
+
                 _, status = install_github_ref(
                     request.ref,
                     repo_url=request.repo_url,
                     summary=summary,
+                    on_stage=on_stage,
                 )
             except Exception as exc:
+                if request.job_id:
+                    save_package_job_state(
+                        request.job_id,
+                        {
+                            "job_id": request.job_id,
+                            "step": 6,
+                            "total": 6,
+                            "label": str(exc),
+                            "status": "error",
+                        },
+                    )
                 self._send_json({"error": str(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
                 return
+            if request.job_id:
+                save_package_job_state(
+                    request.job_id,
+                    {
+                        "job_id": request.job_id,
+                        "step": 6,
+                        "total": 6,
+                        "label": "done",
+                        "status": "done",
+                        "installed_version": status.installed_version,
+                        "requested_ref": status.requested_ref,
+                        "resolved_ref": status.resolved_ref,
+                    },
+                )
             self._send_json(
                 {
                     "installed_version": status.installed_version,

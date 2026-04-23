@@ -6,6 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 import json
 import os
 from pathlib import Path
+import secrets
 import subprocess
 import socket
 import sys
@@ -76,6 +77,7 @@ from homebase_cli.registry import (
 from homebase_cli.resources import all_resources, child_resources, find_resource
 from homebase_cli.scanner import (
     detect_scannable_networks,
+    fetch_package_progress,
     fetch_package_status,
     fetch_profile,
     load_discovered_nodes,
@@ -503,34 +505,44 @@ def _run_package_batch(
     if not selected_nodes:
         return []
     rows: dict[str, tuple[str, ...]] = {}
+    stage_state: dict[str, tuple[int, int, str]] = {}
     max_workers = min(8, max(1, len(selected_nodes)))
     progress = _package_progress()
     with progress:
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             future_map = {}
             for node in selected_nodes:
-                task_id = progress.add_task(
-                    f"{description_prefix}: {node.name} (1/4 queued)",
-                    total=4,
-                    completed=1,
-                )
-                future = executor.submit(worker, node)
-                progress.update(task_id, completed=2, description=f"{description_prefix}: {node.name} (2/4 dispatched)")
+                task_id = progress.add_task(f"{description_prefix}: {node.name} (1/4 queued)", total=4, completed=1)
+                def stage_callback(step: int, total: int, label: str, *, _name=node.name) -> None:
+                    stage_state[_name] = (step, total, label)
+                future = executor.submit(worker, node, stage_callback)
+                stage_state[node.name] = (2, 4, "dispatched")
                 future_map[future] = (node, task_id)
             while future_map:
                 finished = []
                 for future, (node, task_id) in list(future_map.items()):
+                    step, total, label = stage_state.get(node.name, (2, 4, "dispatched"))
+                    _update_batch_stage(progress, task_id, description_prefix, node.name, step, total, label)
                     if future.done():
                         payload = future.result()
-                        progress.update(task_id, completed=3, description=f"{description_prefix}: {node.name} (3/4 response received)")
                         rows[node.name] = row_builder(node, payload)
-                        progress.update(task_id, completed=4, description=f"{description_prefix}: {node.name} (4/4 recorded)")
+                        _update_batch_stage(progress, task_id, description_prefix, node.name, total, total, "done")
                         finished.append(future)
                 for future in finished:
                     del future_map[future]
                 if future_map:
                     time.sleep(0.1)
     return [rows[node.name] for node in selected_nodes if node.name in rows]
+
+
+def _update_batch_stage(progress: Progress, task_id, prefix: str, node_name: str, step: int, total: int, label: str) -> None:
+    """Render one package batch stage update."""
+    progress.update(
+        task_id,
+        total=total,
+        completed=step,
+        description=f"{prefix}: {node_name} ({step}/{total} {label})",
+    )
 
 
 def _choose_runtime_role() -> str:
@@ -2001,17 +2013,21 @@ def package_status_command(
         table.add_column("Summary")
         table.add_column("Installed At")
         table.add_column("Result")
-        def worker(node):
+        def worker(node, stage_callback):
             is_local = bool(current_name and node.name == current_name)
+            stage_callback(2, 3, "querying")
             if is_local:
+                stage_callback(3, 3, "local status ready")
                 return {
                     "payload": _local_package_status_payload(),
                     "address": detect_primary_address() or "",
                     "result": "ok",
                 }
             if not node.address:
+                stage_callback(3, 3, "no address")
                 return {"payload": None, "address": "", "result": "no address"}
             payload = fetch_package_status(node.address, port=node.client_port or DEFAULT_CLIENT_PORT)
+            stage_callback(3, 3, "response received" if payload is not None else "no response")
             return {
                 "payload": payload,
                 "address": node.address,
@@ -2185,7 +2201,7 @@ def package_install_command(
         table.add_column("Requested")
         table.add_column("Resolved")
         table.add_column("Result")
-        def worker(node):
+        def worker(node, stage_callback):
             is_local = bool(current_name and node.name == current_name)
             if is_local:
                 try:
@@ -2194,6 +2210,7 @@ def package_install_command(
                         repo_url=repo_url,
                         python_bin=python_bin,
                         summary=selected_summary,
+                        on_stage=stage_callback,
                     )
                     return {
                         "payload": {
@@ -2207,14 +2224,40 @@ def package_install_command(
                 except PackageOperationError as exc:
                     return {"payload": None, "address": detect_primary_address() or "", "result": f"log: {exc.log_path}"}
             if not node.address:
+                stage_callback(3, 6, "no address")
                 return {"payload": None, "address": "", "result": "no address"}
-            payload = request_package_install(
-                node.address,
-                ref=selected_ref,
-                repo_url=repo_url,
-                summary=selected_summary,
-                port=node.client_port or DEFAULT_CLIENT_PORT,
-            )
+            job_id = secrets.token_hex(8)
+            stage_callback(3, 6, "requesting remote install")
+            result_holder: dict[str, object] = {}
+
+            def run_request() -> None:
+                result_holder["payload"] = request_package_install(
+                    node.address,
+                    ref=selected_ref,
+                    repo_url=repo_url,
+                    summary=selected_summary,
+                    job_id=job_id,
+                    port=node.client_port or DEFAULT_CLIENT_PORT,
+                )
+
+            request_thread = ThreadPoolExecutor(max_workers=1)
+            future = request_thread.submit(run_request)
+            try:
+                while not future.done():
+                    progress_payload = fetch_package_progress(
+                        node.address,
+                        job_id=job_id,
+                        port=node.client_port or DEFAULT_CLIENT_PORT,
+                    )
+                    if progress_payload is not None:
+                        step = int(progress_payload.get("step", 3) or 3)
+                        total = int(progress_payload.get("total", 6) or 6)
+                        label = str(progress_payload.get("label") or "running")
+                        stage_callback(step, total, label)
+                    time.sleep(0.2)
+            finally:
+                request_thread.shutdown(wait=True)
+            payload = result_holder.get("payload")
             return {
                 "payload": payload,
                 "address": node.address,
@@ -2271,7 +2314,7 @@ def package_update_command(
         table.add_column("Requested")
         table.add_column("Resolved")
         table.add_column("Result")
-        def worker(node):
+        def worker(node, stage_callback):
             is_local = bool(current_name and node.name == current_name)
             if is_local:
                 try:
@@ -2280,6 +2323,7 @@ def package_update_command(
                         repo_url=repo_url,
                         python_bin=python_bin,
                         summary=latest.summary,
+                        on_stage=stage_callback,
                     )
                     return {
                         "payload": {
@@ -2293,13 +2337,39 @@ def package_update_command(
                 except PackageOperationError as exc:
                     return {"payload": None, "address": detect_primary_address() or "", "result": f"log: {exc.log_path}"}
             if not node.address:
+                stage_callback(3, 6, "no address")
                 return {"payload": None, "address": "", "result": "no address"}
-            payload = request_package_upgrade(
-                node.address,
-                repo_url=repo_url,
-                include_prerelease=include_prerelease,
-                port=node.client_port or DEFAULT_CLIENT_PORT,
-            )
+            job_id = secrets.token_hex(8)
+            stage_callback(2, 6, "requesting remote update")
+            result_holder: dict[str, object] = {}
+
+            def run_request() -> None:
+                result_holder["payload"] = request_package_upgrade(
+                    node.address,
+                    repo_url=repo_url,
+                    include_prerelease=include_prerelease,
+                    job_id=job_id,
+                    port=node.client_port or DEFAULT_CLIENT_PORT,
+                )
+
+            request_thread = ThreadPoolExecutor(max_workers=1)
+            future = request_thread.submit(run_request)
+            try:
+                while not future.done():
+                    progress_payload = fetch_package_progress(
+                        node.address,
+                        job_id=job_id,
+                        port=node.client_port or DEFAULT_CLIENT_PORT,
+                    )
+                    if progress_payload is not None:
+                        step = int(progress_payload.get("step", 2) or 2)
+                        total = int(progress_payload.get("total", 6) or 6)
+                        label = str(progress_payload.get("label") or "running")
+                        stage_callback(step, total, label)
+                    time.sleep(0.2)
+            finally:
+                request_thread.shutdown(wait=True)
+            payload = result_holder.get("payload")
             return {
                 "payload": payload,
                 "address": node.address,

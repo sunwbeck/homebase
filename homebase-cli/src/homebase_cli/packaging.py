@@ -439,9 +439,12 @@ def install_github_ref(
     python_bin: str | None = None,
     summary: str | None = None,
     on_tick: Callable[[], None] | None = None,
+    on_stage: Callable[[int, int, str], None] | None = None,
 ) -> tuple[LoggedResult, InstalledPackageStatus]:
     """Install or update from one GitHub ref and persist local install state."""
     interpreter = python_bin if python_bin is not None else sys.executable
+    if on_stage is not None:
+        on_stage(1, 6, "preparing source")
     try:
         source_dir_holder, install_root = _prepare_install_source(repo_url, ref)
     except RuntimeError as exc:
@@ -449,6 +452,9 @@ def install_github_ref(
         _write_log(log_path, f"download/install preparation failed\n\n{exc}\n")
         raise PackageOperationError(str(exc), log_path) from exc
     try:
+        if on_stage is not None:
+            on_stage(2, 6, "source ready")
+            on_stage(3, 6, "running installer")
         result = _run_logged(
             [interpreter, "-m", "pip", "install", "--upgrade", "--force-reinstall", "--no-cache-dir", str(install_root)],
             cwd=install_root,
@@ -459,13 +465,27 @@ def install_github_ref(
         source_dir_holder.cleanup()
     if result.returncode != 0:
         raise PackageOperationError("install failed", result.log_path)
+    if on_stage is not None:
+        on_stage(4, 6, "verifying installed version")
     status = InstalledPackageStatus(
         installed_version=installed_version(interpreter),
         repo_url=_normalize_repo_url(repo_url),
         requested_ref=ref,
-        resolved_ref=resolve_github_ref(repo_url, ref),
+        resolved_ref=None,
         summary=summary,
+        installed_at=None,
+    )
+    if on_stage is not None:
+        on_stage(5, 6, "resolving commit")
+    status = InstalledPackageStatus(
+        installed_version=status.installed_version,
+        repo_url=status.repo_url,
+        requested_ref=status.requested_ref,
+        resolved_ref=resolve_github_ref(repo_url, ref),
+        summary=status.summary,
         installed_at=datetime.now(UTC).isoformat(),
     )
+    if on_stage is not None:
+        on_stage(6, 6, "recording install state")
     save_install_state(status)
     return result, status

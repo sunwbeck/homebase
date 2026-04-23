@@ -335,14 +335,14 @@ def test_package_update_supports_multiple_nodes_and_groups(monkeypatch) -> None:
         monkeypatch.setattr("homebase_cli.cli.detect_primary_address", lambda: "192.168.0.10")
         monkeypatch.setattr(
             "homebase_cli.cli.install_github_ref",
-            lambda ref, repo_url, python_bin=None, summary=None: (
+            lambda ref, repo_url, python_bin=None, summary=None, on_stage=None: (
                 None,
                 SimpleNamespace(installed_version="0.1.29", requested_ref=ref, resolved_ref="abc999"),
             ),
         )
         monkeypatch.setattr(
             "homebase_cli.cli.request_package_upgrade",
-            lambda address, repo_url, include_prerelease=False, port=8428: {
+            lambda address, repo_url, include_prerelease=False, job_id=None, port=8428: {
                 "installed_version": "0.1.29",
                 "requested_ref": "v0.1.29",
                 "resolved_ref": f"{address}-commit",
