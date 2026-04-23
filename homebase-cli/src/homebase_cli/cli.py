@@ -504,6 +504,11 @@ def _package_stage_text(
     return f"{prefix}: [{step}/{total}] {label}"
 
 
+def _package_active_text(*, description_prefix: str, node_name: str, label: str) -> str:
+    """Render one active package spinner line."""
+    return f"{description_prefix} {_node_label(node_name)}: {label}"
+
+
 def _print_package_stage(
     *,
     description_prefix: str,
@@ -583,38 +588,15 @@ def _run_package_batch(
             future_map = {}
             for node in selected_nodes:
                 stage_state[node.name] = (1, 6, "queued", "waiting")
-                _log_package_stage(
-                    progress=progress,
-                    description_prefix=description_prefix,
-                    node_name=node.name,
-                    step=1,
-                    total=6,
-                    label="queued",
-                    status="waiting",
-                    lock=stage_lock,
-                )
                 task_ids[node.name] = progress.add_task(
-                    _package_stage_text(
+                    _package_active_text(
                         description_prefix=description_prefix,
                         node_name=node.name,
-                        step=1,
-                        total=6,
                         label="submitted",
-                        status="running",
                     ),
                     total=None,
                 )
                 stage_state[node.name] = (1, 6, "submitted", "running")
-                _log_package_stage(
-                    progress=progress,
-                    description_prefix=description_prefix,
-                    node_name=node.name,
-                    step=1,
-                    total=6,
-                    label="submitted",
-                    status="running",
-                    lock=stage_lock,
-                )
 
                 def stage_callback(step: int, total: int, label: str, *, _name=node.name) -> None:
                     current = stage_state.get(_name, (step, total, label, "running"))
@@ -635,13 +617,10 @@ def _run_package_batch(
                     with stage_lock:
                         progress.update(
                             task_ids[_name],
-                            description=_package_stage_text(
+                            description=_package_active_text(
                                 description_prefix=description_prefix,
                                 node_name=_name,
-                                step=step,
-                                total=total,
                                 label=label,
-                                status=status,
                             ),
                         )
 
@@ -2280,24 +2259,12 @@ def _run_install_flow(
     local_name = _current_node_name() or "local"
     with Progress(SpinnerColumn(), TextColumn("{task.description}"), console=console, transient=False) as progress:
         task = progress.add_task(
-            _package_stage_text(
+            _package_active_text(
                 description_prefix=description_prefix,
                 node_name=local_name,
-                step=1,
-                total=6,
                 label=f"resolving target {ref}",
-                status="running",
             ),
             total=None,
-        )
-        _log_package_stage(
-            progress=progress,
-            description_prefix=description_prefix,
-            node_name=local_name,
-            step=1,
-            total=6,
-            label=f"resolving target {ref}",
-            status="running",
         )
         last_stage: tuple[int, int, str] | None = None
 
@@ -2318,13 +2285,10 @@ def _run_install_flow(
             )
             progress.update(
                 task,
-                description=_package_stage_text(
+                description=_package_active_text(
                     description_prefix=description_prefix,
                     node_name=local_name,
-                    step=step,
-                    total=total,
                     label=label,
-                    status="running",
                 ),
             )
 
