@@ -75,6 +75,18 @@ def test_github_versions_falls_back_to_tags(monkeypatch) -> None:
     assert versions[0].summary == "tag without release notes"
 
 
+def test_github_versions_falls_back_to_default_branch(monkeypatch) -> None:
+    payloads = [
+        [],
+        [],
+        {"default_branch": "main"},
+    ]
+    monkeypatch.setattr("homebase_cli.packaging._fetch_json", lambda url: payloads.pop(0))
+    versions = github_versions(DEFAULT_REPO_URL)
+    assert versions[0].version == "main"
+    assert versions[0].source == "branch"
+
+
 def test_save_and_load_install_state_round_trip(tmp_path: Path, monkeypatch) -> None:
     path = tmp_path / "install-state.json"
     monkeypatch.setattr("homebase_cli.packaging.installed_version", lambda python_bin=None: "0.2.0")

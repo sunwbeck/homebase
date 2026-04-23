@@ -154,6 +154,19 @@ def test_package_versions_prints_github_versions(monkeypatch) -> None:
     assert "Version" in result.stdout
 
 
+def test_package_version_alias_prints_github_versions(monkeypatch) -> None:
+    runner = CliRunner()
+    monkeypatch.setattr(
+        "homebase_cli.cli.github_versions",
+        lambda repo_url, include_prerelease=False: (
+            SimpleNamespace(version="main", source="branch", published_at="", summary="default branch"),
+        ),
+    )
+    result = runner.invoke(app, ["package", "version"])
+    assert result.exit_code == 0
+    assert "default branch" in result.stdout
+
+
 def test_package_status_prints_local_install_state(monkeypatch) -> None:
     runner = CliRunner()
     monkeypatch.setattr(

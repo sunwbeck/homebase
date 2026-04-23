@@ -568,6 +568,15 @@ def package_versions_command(
     console.print(table)
 
 
+@package_app.command("version", hidden=True)
+def package_version_command(
+    repo_url: str = typer.Option(DEFAULT_REPO_URL, "--repo", help="GitHub repository URL."),
+    include_prerelease: bool = typer.Option(False, "--pre-release", help="Include prerelease GitHub releases."),
+) -> None:
+    """Hidden singular alias for `homebase package versions`."""
+    package_versions_command(repo_url=repo_url, include_prerelease=include_prerelease)
+
+
 def _run_install_flow(
     *,
     ref: str,

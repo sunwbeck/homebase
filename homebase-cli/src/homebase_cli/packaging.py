@@ -239,7 +239,7 @@ def github_versions(
     include_prerelease: bool = False,
     limit: int = 20,
 ) -> tuple[GitHubVersion, ...]:
-    """Return visible versions from GitHub releases, or tags when releases do not exist."""
+    """Return visible versions from GitHub releases, tags, or the default branch."""
     releases_payload = _fetch_json(_github_api_url(repo_url, f"/releases?per_page={max(limit, 1)}"))
     releases: list[GitHubVersion] = []
     for item in releases_payload:
@@ -278,25 +278,28 @@ def github_versions(
                 url=f"https://github.com/{github_repo_slug(repo_url)}/tree/{quote(name, safe='')}",
             )
         )
-    return tuple(tags[:limit])
+    if tags:
+        return tuple(tags[:limit])
+
+    repo_payload = _fetch_json(_github_api_url(repo_url, ""))
+    default_branch = str(repo_payload.get("default_branch") or "main")
+    return (
+        GitHubVersion(
+            version=default_branch,
+            ref=default_branch,
+            summary="default branch",
+            published_at="",
+            prerelease=False,
+            source="branch",
+            url=f"https://github.com/{github_repo_slug(repo_url)}/tree/{quote(default_branch, safe='')}",
+        ),
+    )
 
 
 def latest_github_version(repo_url: str = DEFAULT_REPO_URL, *, include_prerelease: bool = False) -> GitHubVersion:
     """Return the preferred latest install target from GitHub."""
     versions = github_versions(repo_url, include_prerelease=include_prerelease, limit=20)
-    if versions:
-        return versions[0]
-    repo_payload = _fetch_json(_github_api_url(repo_url, ""))
-    default_branch = str(repo_payload.get("default_branch") or "main")
-    return GitHubVersion(
-        version=default_branch,
-        ref=default_branch,
-        summary="default branch",
-        published_at="",
-        prerelease=False,
-        source="branch",
-        url=f"https://github.com/{github_repo_slug(repo_url)}/tree/{quote(default_branch, safe='')}",
-    )
+    return versions[0]
 
 
 def resolve_github_ref(repo_url: str, ref: str) -> str:
