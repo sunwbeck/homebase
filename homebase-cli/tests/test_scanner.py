@@ -98,7 +98,7 @@ def test_pair_with_client_returns_profile(monkeypatch) -> None:
         version="0.1.0",
         open_ports=(22,),
         services=("ssh",),
-        exposed_endpoints=((22, "22", None),),
+        exposed_endpoints=((22, "ssh", None),),
     )
     monkeypatch.setattr(
         "homebase_cli.scanner._http_request",

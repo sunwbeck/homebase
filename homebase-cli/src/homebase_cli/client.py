@@ -257,6 +257,10 @@ def detect_open_ports() -> tuple[int, ...]:
 
 def describe_port(port: int, owner: str | None = None) -> str:
     """Return one generic label for a listening port without hardcoded service names."""
+    try:
+        return socket.getservbyport(port, "tcp")
+    except OSError:
+        pass
     normalized_owner = (owner or "").strip()
     if normalized_owner.endswith(".service"):
         normalized_owner = normalized_owner.removesuffix(".service")
