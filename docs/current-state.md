@@ -12,6 +12,7 @@ Current implementation direction:
 - `service` for inspecting exposed services on nodes and groups
 - GitHub-backed install and update flow through `homebase package`
 - repo-local docs are updated with the code, rather than keeping a separate NAS docs root
+- managed nodes now have basic Windows profile and service support in addition to Linux
 
 Current runtime naming:
 
@@ -33,6 +34,7 @@ Current priority:
 - prepare the controller runtime for upcoming reverse proxy work
 - keep install and rollout behavior GitHub-ref driven
 - keep status output focused on usable exposure and runtime information rather than operator label fields
+- keep Windows managed-node support at the level of pairing, profile collection, and basic service start/stop until deeper Windows ops are designed
 
 ## Working Directory Policy
 

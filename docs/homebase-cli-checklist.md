@@ -147,7 +147,7 @@ This checklist exists so `homebase` CLI work can continue as if one person had b
 - `[ ]` add a control-plane command to roll one GitHub ref to one or more nodes
 - `[ ]` add one local self-test command for discovery and pairing
 - `[ ]` define the canary rollout procedure before wider deployment
-- `[ ]` define how non-Linux nodes such as `workstation` participate or opt out
+- `[~]` define how non-Linux nodes such as `workstation` participate or opt out
 
 ### 9. Testing
 

@@ -200,6 +200,25 @@ def stop_connect_server(path: Path | None = None) -> ConnectRuntime | None:
 
 def read_machine_id() -> str | None:
     """Read the local machine-id when present."""
+    if platform_module.system().lower() == "windows":
+        try:
+            proc = subprocess.run(
+                ["reg", "query", r"HKLM\\SOFTWARE\\Microsoft\\Cryptography", "/v", "MachineGuid"],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+        except OSError:
+            proc = None
+        if proc is not None and proc.returncode == 0:
+            for line in proc.stdout.splitlines():
+                if "MachineGuid" not in line:
+                    continue
+                parts = line.split()
+                if parts:
+                    value = parts[-1].strip()
+                    if value:
+                        return value
     for path in (Path("/etc/machine-id"), Path("/var/lib/dbus/machine-id")):
         try:
             value = path.read_text(encoding="utf-8").strip()
@@ -222,6 +241,36 @@ def local_controller_hostname() -> str:
     return socket.gethostname().strip() or "unknown"
 
 
+def _is_windows() -> bool:
+    """Return whether the current runtime is Windows."""
+    return platform_module.system().lower() == "windows"
+
+
+def _powershell_binary() -> str | None:
+    """Return one available PowerShell executable."""
+    for candidate in ("pwsh", "powershell", "powershell.exe"):
+        resolved = shutil.which(candidate)
+        if resolved is not None:
+            return resolved
+    return None
+
+
+def _run_powershell(script: str) -> subprocess.CompletedProcess[str] | None:
+    """Run one PowerShell script and return the completed process."""
+    executable = _powershell_binary()
+    if executable is None:
+        return None
+    try:
+        return subprocess.run(
+            [executable, "-NoProfile", "-NonInteractive", "-Command", script],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except OSError:
+        return None
+
+
 def detect_primary_address() -> str | None:
     """Return one likely primary local IPv4 address."""
     try:
@@ -241,6 +290,16 @@ def detect_primary_address() -> str | None:
         address = ""
     if address and not address.startswith("127."):
         return address
+    if _is_windows():
+        proc = _run_powershell(
+            r"Get-NetIPAddress -AddressFamily IPv4 | "
+            r"Where-Object { $_.IPAddress -notlike '127.*' -and $_.IPAddress -ne '0.0.0.0' } | "
+            r"Select-Object -ExpandProperty IPAddress -First 1"
+        )
+        if proc is not None and proc.returncode == 0:
+            candidate = proc.stdout.strip()
+            if candidate:
+                return candidate
     for command in (["ip", "-4", "-br", "addr"], ["/usr/sbin/ip", "-4", "-br", "addr"]):
         try:
             proc = subprocess.run(
@@ -287,6 +346,29 @@ def describe_port(port: int, owner: str | None = None) -> str:
 
 def _interface_addresses() -> dict[str, str]:
     """Return one address-to-interface map for current addresses."""
+    if _is_windows():
+        proc = _run_powershell(
+            r"Get-NetIPAddress | "
+            r"Where-Object { $_.IPAddress -and $_.IPAddress -ne '127.0.0.1' -and $_.IPAddress -ne '::1' } | "
+            r"Select-Object IPAddress,InterfaceAlias | ConvertTo-Json -Compress"
+        )
+        if proc is not None and proc.returncode == 0 and proc.stdout.strip():
+            try:
+                payload = json.loads(proc.stdout)
+            except json.JSONDecodeError:
+                payload = []
+            if isinstance(payload, dict):
+                payload = [payload]
+            mapping: dict[str, str] = {}
+            for item in payload:
+                if not isinstance(item, dict):
+                    continue
+                ip_value = str(item.get("IPAddress", "")).strip().strip("[]").split("%", 1)[0]
+                iface_value = str(item.get("InterfaceAlias", "")).strip()
+                if ip_value and iface_value:
+                    mapping[ip_value] = iface_value
+            if mapping:
+                return mapping
     for command in (["ip", "-br", "addr"], ["/usr/sbin/ip", "-br", "addr"]):
         try:
             proc = subprocess.run(
@@ -317,6 +399,23 @@ def _interface_addresses() -> dict[str, str]:
 
 def _socket_listing_output() -> str:
     """Return listening socket output, retrying with sudo when process info is hidden."""
+    if _is_windows():
+        proc = _run_powershell(
+            r"$connections = Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue; "
+            r"$rows = foreach ($conn in $connections) { "
+            r"$process = Get-Process -Id $conn.OwningProcess -ErrorAction SilentlyContinue; "
+            r"[PSCustomObject]@{ "
+            r"LocalAddress = $conn.LocalAddress; "
+            r"LocalPort = $conn.LocalPort; "
+            r"OwningProcess = $conn.OwningProcess; "
+            r"ProcessName = if ($process) { $process.ProcessName } else { '' } "
+            r"} "
+            r"}; "
+            r"$rows | ConvertTo-Json -Compress"
+        )
+        if proc is None or proc.returncode != 0:
+            return ""
+        return proc.stdout
     proc = subprocess.run(
         ["ss", "-ltnpH"],
         check=False,
@@ -348,6 +447,30 @@ def detect_endpoint_records() -> tuple[tuple[int, str, str | None, int | None], 
     if not stdout:
         return ()
     interface_by_address = _interface_addresses()
+    if _is_windows():
+        try:
+            payload = json.loads(stdout)
+        except json.JSONDecodeError:
+            payload = []
+        if isinstance(payload, dict):
+            payload = [payload]
+        endpoints: dict[tuple[int, int | None], tuple[int, str, str | None, int | None]] = {}
+        for item in payload:
+            if not isinstance(item, dict):
+                continue
+            host = str(item.get("LocalAddress", "")).strip().strip("[]").split("%", 1)[0]
+            if not host or host in {"127.0.0.1", "::1", "localhost"} or host.startswith("127."):
+                continue
+            try:
+                port = int(item.get("LocalPort"))
+            except (TypeError, ValueError):
+                continue
+            owner = str(item.get("ProcessName", "")).strip() or None
+            pid_raw = item.get("OwningProcess")
+            pid = int(pid_raw) if isinstance(pid_raw, int) or (isinstance(pid_raw, str) and str(pid_raw).isdigit()) else None
+            fallback_owner = owner or interface_by_address.get(host)
+            endpoints[(port, pid)] = (port, describe_port(port, fallback_owner), owner, pid)
+        return tuple(sorted(endpoints.values(), key=lambda item: (item[0], item[3] or -1)))
     endpoints: dict[tuple[int, int | None], tuple[int, str, str | None, int | None]] = {}
     for line in stdout.splitlines():
         parts = line.split()
@@ -401,6 +524,18 @@ def detect_exposed_services() -> tuple[str, ...]:
 
 def detect_running_services() -> tuple[str, ...]:
     """Return running systemd service unit names when available."""
+    if _is_windows():
+        return tuple(
+            sorted(
+                dict.fromkeys(
+                    [
+                        name
+                        for name, state, _, _, _ in detect_service_records()
+                        if state == "running"
+                    ]
+                )
+            )
+        )
     proc = subprocess.run(
         ["systemctl", "list-units", "--type=service", "--state=running", "--plain", "--no-legend", "--no-pager"],
         check=False,
@@ -424,6 +559,31 @@ def detect_running_services() -> tuple[str, ...]:
 def detect_service_records() -> tuple[tuple[str, str, int | None, str, str], ...]:
     """Return generic service records from systemd and docker when available."""
     records: dict[tuple[str, str], tuple[str, str, int | None, str, str]] = {}
+
+    if _is_windows():
+        proc = _run_powershell(
+            r"Get-CimInstance Win32_Service | "
+            r"Select-Object Name,State,ProcessId,DisplayName | ConvertTo-Json -Compress"
+        )
+        if proc is not None and proc.returncode == 0 and proc.stdout.strip():
+            try:
+                payload = json.loads(proc.stdout)
+            except json.JSONDecodeError:
+                payload = []
+            if isinstance(payload, dict):
+                payload = [payload]
+            for item in payload:
+                if not isinstance(item, dict):
+                    continue
+                name = str(item.get("Name", "")).strip()
+                if not name:
+                    continue
+                state = str(item.get("State", "")).strip().lower() or "unknown"
+                pid_raw = item.get("ProcessId")
+                pid = int(pid_raw) if isinstance(pid_raw, int) and pid_raw > 0 else None
+                description = str(item.get("DisplayName", "")).strip()
+                records[("windows-service", name)] = (name, state, pid, "windows-service", description)
+        return tuple(sorted(records.values(), key=lambda item: (item[3], item[0])))
 
     systemctl = shutil.which("systemctl")
     if systemctl is not None:
@@ -833,6 +993,20 @@ def control_service(service: str, action: str) -> None:
     target = service.strip()
     if not target:
         raise ValueError("service name cannot be empty")
+
+    if _is_windows():
+        script = (
+            f"$service = Get-Service -Name '{target}' -ErrorAction SilentlyContinue; "
+            f"if (-not $service) {{ exit 4 }}; "
+            f"{'Start-Service' if normalized_action == 'start' else 'Stop-Service'} -Name '{target}' -ErrorAction Stop"
+        )
+        result = _run_powershell(script)
+        if result is not None:
+            if result.returncode == 0:
+                return
+            if result.returncode == 4:
+                raise RuntimeError(f"unknown service target: {target}")
+            raise RuntimeError(result.stderr.strip() or result.stdout.strip() or f"failed to {normalized_action} {target}")
 
     systemctl = shutil.which("systemctl")
     if systemctl is not None:

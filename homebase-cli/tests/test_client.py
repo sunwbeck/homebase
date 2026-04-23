@@ -7,8 +7,11 @@ from homebase_cli.client import (
     ClientState,
     PackageInstallRequest,
     PairRequest,
+    control_service,
     detect_endpoint_records,
     detect_exposed_endpoints,
+    detect_primary_address,
+    detect_service_records,
     load_client_state,
     pair_controller,
     parse_package_install_request,
@@ -164,3 +167,63 @@ def test_detect_endpoint_records_uses_sudo_when_plain_ss_hides_processes(monkeyp
     monkeypatch.setattr("homebase_cli.client.subprocess.run", lambda *args, **kwargs: next(outputs))
     endpoints = detect_endpoint_records()
     assert endpoints == ((38339, "tailscaled", "tailscaled", 30787),)
+
+
+def test_detect_primary_address_uses_windows_powershell(monkeypatch) -> None:
+    monkeypatch.setattr("homebase_cli.client.platform_module.system", lambda: "Windows")
+    monkeypatch.setattr(
+        "homebase_cli.client.socket.gethostbyname",
+        lambda _: "127.0.0.1",
+    )
+    monkeypatch.setattr(
+        "homebase_cli.client._run_powershell",
+        lambda script: SimpleNamespace(returncode=0, stdout="192.168.0.50\n", stderr=""),
+    )
+    assert detect_primary_address() == "192.168.0.50"
+
+
+def test_detect_endpoint_records_uses_windows_powershell(monkeypatch) -> None:
+    monkeypatch.setattr("homebase_cli.client.platform_module.system", lambda: "Windows")
+    monkeypatch.setattr(
+        "homebase_cli.client._run_powershell",
+        lambda script: SimpleNamespace(
+            returncode=0,
+            stdout='[{"LocalAddress":"192.168.0.50","LocalPort":8428,"OwningProcess":4321,"ProcessName":"python"},{"LocalAddress":"127.0.0.1","LocalPort":9000,"OwningProcess":5000,"ProcessName":"local"}]',
+            stderr="",
+        ),
+    )
+    monkeypatch.setattr("homebase_cli.client._interface_addresses", lambda: {})
+    endpoints = detect_endpoint_records()
+    assert endpoints == ((8428, "python", "python", 4321),)
+
+
+def test_detect_service_records_uses_windows_services(monkeypatch) -> None:
+    monkeypatch.setattr("homebase_cli.client.platform_module.system", lambda: "Windows")
+    monkeypatch.setattr(
+        "homebase_cli.client._run_powershell",
+        lambda script: SimpleNamespace(
+            returncode=0,
+            stdout='[{"Name":"sshd","State":"Running","ProcessId":1010,"DisplayName":"OpenSSH SSH Server"},{"Name":"WSearch","State":"Stopped","ProcessId":0,"DisplayName":"Windows Search"}]',
+            stderr="",
+        ),
+    )
+    records = detect_service_records()
+    assert records == (
+        ("WSearch", "stopped", None, "windows-service", "Windows Search"),
+        ("sshd", "running", 1010, "windows-service", "OpenSSH SSH Server"),
+    )
+
+
+def test_control_service_uses_windows_service_backend(monkeypatch) -> None:
+    monkeypatch.setattr("homebase_cli.client.platform_module.system", lambda: "Windows")
+    calls: list[str] = []
+
+    def fake_run_powershell(script: str):
+        calls.append(script)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("homebase_cli.client._run_powershell", fake_run_powershell)
+    control_service("sshd", "start")
+    assert calls
+    assert "Get-Service -Name 'sshd'" in calls[0]
+    assert "Start-Service -Name 'sshd'" in calls[0]
