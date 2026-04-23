@@ -439,6 +439,47 @@ def _resolve_remote_package_target(resource: str):
     return node, port
 
 
+def _selected_package_nodes(
+    resources: list[str] | None,
+    groups: list[str] | None,
+    all_nodes: bool,
+) -> list:
+    """Return selected package target nodes for controller batch actions."""
+    _require_role("controller")
+    resources = resources or []
+    groups = groups or []
+    inventory = list(_inventory_nodes())
+    by_name = {node.name: node for node in inventory}
+    selected: dict[str, object] = {}
+    if all_nodes:
+        selected.update(by_name)
+    for group_name in groups:
+        matched = [node for node in inventory if group_name in node.role_groups]
+        if not matched:
+            raise typer.BadParameter(f"unknown or empty group: {group_name}")
+        for node in matched:
+            selected[node.name] = node
+    for resource in resources:
+        node = by_name.get(resource)
+        if node is None:
+            raise typer.BadParameter(f"unknown node: {resource}")
+        selected[node.name] = node
+    return [selected[name] for name in sorted(selected)]
+
+
+def _local_package_status_payload() -> dict[str, object]:
+    """Return the current local package status as a payload-like mapping."""
+    current = load_install_state()
+    return {
+        "installed_version": current.installed_version,
+        "repo_url": current.repo_url or DEFAULT_REPO_URL,
+        "requested_ref": current.requested_ref,
+        "resolved_ref": current.resolved_ref,
+        "summary": current.summary,
+        "installed_at": current.installed_at,
+    }
+
+
 def _choose_runtime_role() -> str:
     return _pick_from_list("Local runtime role", list(runtime_roles()))
 
@@ -1890,27 +1931,49 @@ def inventory_edit_command() -> None:
 
 @package_app.command("status")
 def package_status_command(
-    resource: str | None = typer.Argument(None, help="Optional resource path."),
+    resources: list[str] = typer.Argument(None, help="Optional node names."),
+    group: list[str] = typer.Option(None, "--group", help="Limit to one or more groups."),
+    all_nodes: bool = typer.Option(False, "--all", help="Show package status for all registered nodes."),
 ) -> None:
-    """Show the installed homebase revision on this node or on one managed node."""
-    if resource is not None:
-        _require_role("controller")
-        node, port = _resolve_remote_package_target(resource)
-        payload = fetch_package_status(node.address, port=port)
-        if payload is None:
-            console.print(f"[red]Package status failed.[/red] No response from {resource} at {node.address}:{port}")
-            raise typer.Exit(code=1)
-        console.print(f"[bold]Remote package status: {resource}[/bold]")
-        console.print(f"address: {node.address}:{port}")
-        console.print(f"installed version: {payload.get('installed_version') or 'not installed'}")
-        if payload.get("requested_ref"):
-            console.print(f"requested ref: {payload.get('requested_ref')}")
-        if payload.get("resolved_ref"):
-            console.print(f"resolved commit: {payload.get('resolved_ref')}")
-        if payload.get("summary"):
-            console.print(f"summary: {payload.get('summary')}")
-        if payload.get("installed_at"):
-            console.print(f"installed at: {payload.get('installed_at')}")
+    """Show the installed homebase revision locally or across selected nodes."""
+    selected_nodes = _selected_package_nodes(resources, group, all_nodes) if (resources or group or all_nodes) else []
+    if selected_nodes:
+        current_name = _current_node_name()
+        table = Table(show_header=True, header_style="bold")
+        table.add_column("Node")
+        table.add_column("Address")
+        table.add_column("Installed")
+        table.add_column("Requested")
+        table.add_column("Resolved")
+        table.add_column("Summary")
+        table.add_column("Installed At")
+        table.add_column("Result")
+        for node in selected_nodes:
+            is_local = bool(current_name and node.name == current_name)
+            if is_local:
+                payload = _local_package_status_payload()
+                address_value = detect_primary_address() or ""
+                result_value = "ok"
+            else:
+                if not node.address:
+                    payload = None
+                    address_value = ""
+                    result_value = "no address"
+                else:
+                    payload = fetch_package_status(node.address, port=node.client_port or DEFAULT_CLIENT_PORT)
+                    address_value = node.address
+                    result_value = "ok" if payload is not None else "no response"
+            table.add_row(
+                _node_label(node.name),
+                address_value,
+                str((payload or {}).get("installed_version") or "not installed"),
+                str((payload or {}).get("requested_ref") or ""),
+                str((payload or {}).get("resolved_ref") or ""),
+                str((payload or {}).get("summary") or ""),
+                str((payload or {}).get("installed_at") or ""),
+                result_value,
+            )
+        console.print(table)
         return
     current = load_install_state()
     latest: GitHubVersion | None = None
@@ -2028,11 +2091,13 @@ def _run_install_flow(
 
 @package_app.command("install")
 def package_install_command(
-    resource: str | None = typer.Argument(None, help="Optional resource path."),
+    resources: list[str] = typer.Argument(None, help="Optional node names."),
     ref: str | None = typer.Option(None, "--ref", help="GitHub ref to install: branch, tag, release tag, or commit SHA."),
     repo_url: str = typer.Option(DEFAULT_REPO_URL, "--repo", help="GitHub repository URL."),
     python_bin: str | None = typer.Option(None, "--python", help="Explicit Python executable to install into. Defaults to the current Python environment."),
     include_prerelease: bool = typer.Option(False, "--pre-release", help="Include prerelease GitHub releases when choosing interactively."),
+    group: list[str] = typer.Option(None, "--group", help="Install on one or more groups."),
+    all_nodes: bool = typer.Option(False, "--all", help="Install on all registered nodes."),
 ) -> None:
     """Install one GitHub ref, or choose one interactively."""
     selected_summary: str | None = None
@@ -2045,46 +2110,72 @@ def package_install_command(
             raise typer.Exit(code=1)
         selected_ref = chosen.ref
         selected_summary = chosen.summary
-    if resource is not None:
-        _require_role("controller")
-        node, port = _resolve_remote_package_target(resource)
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("{task.description}"),
-            BarColumn(),
-            TaskProgressColumn(),
-            console=console,
-        ) as progress:
-            task = progress.add_task(f"1/2 Resolve remote target: {resource}", total=100)
-            progress.update(task, completed=100)
-            task = progress.add_task(f"2/2 Request install on {resource}", total=100)
-            progress.update(task, completed=30)
-            payload = request_package_install(
-                node.address,
-                ref=selected_ref,
-                repo_url=repo_url,
-                summary=selected_summary,
-                port=port,
+    selected_nodes = _selected_package_nodes(resources, group, all_nodes) if (resources or group or all_nodes) else []
+    if selected_nodes:
+        current_name = _current_node_name()
+        table = Table(show_header=True, header_style="bold")
+        table.add_column("Node")
+        table.add_column("Address")
+        table.add_column("Installed")
+        table.add_column("Requested")
+        table.add_column("Resolved")
+        table.add_column("Result")
+        for node in selected_nodes:
+            is_local = bool(current_name and node.name == current_name)
+            if is_local:
+                try:
+                    _, status = install_github_ref(
+                        selected_ref,
+                        repo_url=repo_url,
+                        python_bin=python_bin,
+                        summary=selected_summary,
+                    )
+                    result_value = "ok"
+                    payload = {
+                        "installed_version": status.installed_version,
+                        "requested_ref": status.requested_ref,
+                        "resolved_ref": status.resolved_ref,
+                    }
+                except PackageOperationError as exc:
+                    result_value = f"log: {exc.log_path}"
+                    payload = None
+                address_value = detect_primary_address() or ""
+            else:
+                if not node.address:
+                    payload = None
+                    address_value = ""
+                    result_value = "no address"
+                else:
+                    payload = request_package_install(
+                        node.address,
+                        ref=selected_ref,
+                        repo_url=repo_url,
+                        summary=selected_summary,
+                        port=node.client_port or DEFAULT_CLIENT_PORT,
+                    )
+                    address_value = node.address
+                    result_value = "ok" if payload is not None else "no response"
+            table.add_row(
+                _node_label(node.name),
+                address_value,
+                str((payload or {}).get("installed_version") or "unknown"),
+                str((payload or {}).get("requested_ref") or selected_ref),
+                str((payload or {}).get("resolved_ref") or ""),
+                result_value,
             )
-            progress.update(task, completed=100)
-        if payload is None:
-            console.print(f"[red]Remote package install failed.[/red] No response from {resource} at {node.address}:{port}")
-            raise typer.Exit(code=1)
-        console.print(f"[green]Remote install completed:[/green] {resource}")
-        console.print(f"installed version: {payload.get('installed_version') or 'unknown'}")
-        console.print(f"requested ref: {payload.get('requested_ref') or selected_ref}")
-        if payload.get("resolved_ref"):
-            console.print(f"resolved commit: {payload.get('resolved_ref')}")
+        console.print(table)
         return
     _run_install_flow(ref=selected_ref, repo_url=repo_url, python_bin=python_bin, summary=selected_summary)
 
 
 @package_app.command("update")
 def package_update_command(
-    resource: str | None = typer.Argument(None, help="Optional resource path."),
+    resources: list[str] = typer.Argument(None, help="Optional node names."),
     repo_url: str = typer.Option(DEFAULT_REPO_URL, "--repo", help="GitHub repository URL."),
     python_bin: str | None = typer.Option(None, "--python", help="Explicit Python executable to install into. Defaults to the current Python environment."),
     include_prerelease: bool = typer.Option(False, "--pre-release", help="Allow prerelease versions when selecting the latest target."),
+    group: list[str] = typer.Option(None, "--group", help="Update one or more groups."),
+    all_nodes: bool = typer.Option(False, "--all", help="Update all registered nodes."),
 ) -> None:
     """Update to the latest available GitHub target."""
     try:
@@ -2094,35 +2185,59 @@ def package_update_command(
         raise typer.Exit(code=1)
     console.print(f"[bold]Selected latest target:[/bold] {latest.version}")
     console.print(f"summary: {latest.summary}")
-    if resource is not None:
-        _require_role("controller")
-        node, port = _resolve_remote_package_target(resource)
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("{task.description}"),
-            BarColumn(),
-            TaskProgressColumn(),
-            console=console,
-        ) as progress:
-            task = progress.add_task(f"1/2 Resolve remote target: {resource}", total=100)
-            progress.update(task, completed=100)
-            task = progress.add_task(f"2/2 Request update on {resource}", total=100)
-            progress.update(task, completed=30)
-            payload = request_package_upgrade(
-                node.address,
-                repo_url=repo_url,
-                include_prerelease=include_prerelease,
-                port=port,
+    selected_nodes = _selected_package_nodes(resources, group, all_nodes) if (resources or group or all_nodes) else []
+    if selected_nodes:
+        current_name = _current_node_name()
+        table = Table(show_header=True, header_style="bold")
+        table.add_column("Node")
+        table.add_column("Address")
+        table.add_column("Installed")
+        table.add_column("Requested")
+        table.add_column("Resolved")
+        table.add_column("Result")
+        for node in selected_nodes:
+            is_local = bool(current_name and node.name == current_name)
+            if is_local:
+                try:
+                    _, status = install_github_ref(
+                        latest.ref,
+                        repo_url=repo_url,
+                        python_bin=python_bin,
+                        summary=latest.summary,
+                    )
+                    payload = {
+                        "installed_version": status.installed_version,
+                        "requested_ref": status.requested_ref,
+                        "resolved_ref": status.resolved_ref,
+                    }
+                    result_value = "ok"
+                except PackageOperationError as exc:
+                    payload = None
+                    result_value = f"log: {exc.log_path}"
+                address_value = detect_primary_address() or ""
+            else:
+                if not node.address:
+                    payload = None
+                    address_value = ""
+                    result_value = "no address"
+                else:
+                    payload = request_package_upgrade(
+                        node.address,
+                        repo_url=repo_url,
+                        include_prerelease=include_prerelease,
+                        port=node.client_port or DEFAULT_CLIENT_PORT,
+                    )
+                    address_value = node.address
+                    result_value = "ok" if payload is not None else "no response"
+            table.add_row(
+                _node_label(node.name),
+                address_value,
+                str((payload or {}).get("installed_version") or "unknown"),
+                str((payload or {}).get("requested_ref") or latest.ref),
+                str((payload or {}).get("resolved_ref") or ""),
+                result_value,
             )
-            progress.update(task, completed=100)
-        if payload is None:
-            console.print(f"[red]Remote package update failed.[/red] No response from {resource} at {node.address}:{port}")
-            raise typer.Exit(code=1)
-        console.print(f"[green]Remote update completed:[/green] {resource}")
-        console.print(f"installed version: {payload.get('installed_version') or 'unknown'}")
-        console.print(f"requested ref: {payload.get('requested_ref') or latest.ref}")
-        if payload.get("resolved_ref"):
-            console.print(f"resolved commit: {payload.get('resolved_ref')}")
+        console.print(table)
         return
     _run_install_flow(ref=latest.ref, repo_url=repo_url, python_bin=python_bin, summary=latest.summary)
 

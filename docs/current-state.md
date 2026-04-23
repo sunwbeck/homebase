@@ -11,6 +11,7 @@ Current implementation direction:
 - `daemon` for background runtime
 - `service` for inspecting exposed services on nodes and groups
 - GitHub-backed install and update flow through `homebase package`
+- `homebase package` can now inspect or roll GitHub refs across the local node, selected nodes, selected groups, or the whole registered fleet
 - repo-local docs are updated with the code, rather than keeping a separate NAS docs root
 - managed nodes now have basic Windows profile and service support in addition to Linux
 

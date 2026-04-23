@@ -187,7 +187,7 @@ def test_role_edit_without_args_prompts_for_local_role(monkeypatch) -> None:
 def test_role_edit_without_args_prompts_for_node_and_role(monkeypatch) -> None:
     runner = CliRunner()
     with runner.isolated_filesystem():
-        env = {"HOMEBASE_SETTINGS_PATH": "settings.toml", "HOMEBASE_REGISTRY_PATH": "nodes.toml"}
+        env = {"HOMEBASE_SETTINGS_PATH": "settings.toml", "HOMEBASE_REGISTRY_PATH": "nodes.toml", "COLUMNS": "240"}
         Path("settings.toml").write_text('role = "controller"\nnode_name = "control"\n', encoding="utf-8")
         Path("nodes.toml").write_text('[[nodes]]\nname = "host.app"\nkind = "vm"\nruntime_role = "managed"\n', encoding="utf-8")
         app = load_app(monkeypatch, "settings.toml")
@@ -258,6 +258,126 @@ def test_root_help_is_concise(monkeypatch) -> None:
     result = runner.invoke(app, ["--help"])
     assert result.exit_code == 0
     assert "connect it to homebase" in result.stdout
+
+
+def test_package_status_supports_all_and_group_selection(monkeypatch) -> None:
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        env = {"HOMEBASE_SETTINGS_PATH": "settings.toml", "HOMEBASE_REGISTRY_PATH": "nodes.toml", "COLUMNS": "240"}
+        Path("settings.toml").write_text('role = "controller"\nnode_name = "control"\n', encoding="utf-8")
+        Path("nodes.toml").write_text(
+            '[[nodes]]\nname = "control"\nkind = "controller"\nruntime_role = "controller"\n'
+            '\n[[nodes]]\nname = "host"\nkind = "node"\nruntime_role = "managed"\naddress = "192.168.0.20"\nclient_port = 8428\nrole_groups = ["infra"]\n'
+            '\n[[nodes]]\nname = "workstation"\nkind = "node"\nruntime_role = "managed"\naddress = "192.168.0.30"\nclient_port = 8428\nrole_groups = ["desktop"]\n',
+            encoding="utf-8",
+        )
+        app = load_app(monkeypatch, "settings.toml")
+        monkeypatch.setattr(
+            "homebase_cli.cli.load_install_state",
+            lambda: SimpleNamespace(
+                installed_version="0.1.29",
+                repo_url="https://github.com/sunwbeck/homebase.git",
+                requested_ref="main",
+                resolved_ref="abc123",
+                summary="local",
+                installed_at="2026-04-24T00:00:00+00:00",
+            ),
+        )
+        monkeypatch.setattr(
+            "homebase_cli.cli.fetch_package_status",
+            lambda address, port=8428: {
+                "installed_version": "0.1.28",
+                "requested_ref": "main",
+                "resolved_ref": "def456",
+                "summary": address,
+                "installed_at": "2026-04-24T00:00:00+00:00",
+            },
+        )
+        monkeypatch.setattr("homebase_cli.cli.detect_primary_address", lambda: "192.168.0.10")
+        result = runner.invoke(app, ["package", "status", "--all"], env=env)
+        assert result.exit_code == 0
+        assert "control" in result.stdout
+        assert "host" in result.stdout
+        assert "192.168.0.30" in result.stdout
+        result = runner.invoke(app, ["package", "status", "--group", "infra"], env=env)
+        assert result.exit_code == 0
+        assert "host" in result.stdout
+        assert "workstation" not in result.stdout
+
+
+def test_package_update_supports_multiple_nodes_and_groups(monkeypatch) -> None:
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        env = {"HOMEBASE_SETTINGS_PATH": "settings.toml", "HOMEBASE_REGISTRY_PATH": "nodes.toml", "COLUMNS": "240"}
+        Path("settings.toml").write_text('role = "controller"\nnode_name = "control"\n', encoding="utf-8")
+        Path("nodes.toml").write_text(
+            '[[nodes]]\nname = "control"\nkind = "controller"\nruntime_role = "controller"\n'
+            '\n[[nodes]]\nname = "host"\nkind = "node"\nruntime_role = "managed"\naddress = "192.168.0.20"\nclient_port = 8428\nrole_groups = ["infra"]\n'
+            '\n[[nodes]]\nname = "workstation"\nkind = "node"\nruntime_role = "managed"\naddress = "192.168.0.30"\nclient_port = 8428\nrole_groups = ["desktop"]\n',
+            encoding="utf-8",
+        )
+        app = load_app(monkeypatch, "settings.toml")
+        monkeypatch.setattr(
+            "homebase_cli.cli.latest_github_version",
+            lambda repo_url, include_prerelease=False: SimpleNamespace(version="v0.1.29", ref="v0.1.29", summary="release"),
+        )
+        monkeypatch.setattr(
+            "homebase_cli.cli.load_install_state",
+            lambda: SimpleNamespace(
+                installed_version="0.1.28",
+                repo_url="https://github.com/sunwbeck/homebase.git",
+                requested_ref="main",
+                resolved_ref="old",
+                summary="old",
+                installed_at="2026-04-24T00:00:00+00:00",
+            ),
+        )
+        monkeypatch.setattr("homebase_cli.cli.detect_primary_address", lambda: "192.168.0.10")
+        monkeypatch.setattr(
+            "homebase_cli.cli.install_github_ref",
+            lambda ref, repo_url, python_bin=None, summary=None: (
+                None,
+                SimpleNamespace(installed_version="0.1.29", requested_ref=ref, resolved_ref="abc999"),
+            ),
+        )
+        monkeypatch.setattr(
+            "homebase_cli.cli.request_package_upgrade",
+            lambda address, repo_url, include_prerelease=False, port=8428: {
+                "installed_version": "0.1.29",
+                "requested_ref": "v0.1.29",
+                "resolved_ref": f"{address}-commit",
+            },
+        )
+        result = runner.invoke(app, ["package", "update", "control", "--group", "infra"], env=env)
+        assert result.exit_code == 0
+        assert "control" in result.stdout
+        assert "host" in result.stdout
+        assert "workstation" not in result.stdout
+
+
+def test_package_install_supports_group_selection(monkeypatch) -> None:
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        env = {"HOMEBASE_SETTINGS_PATH": "settings.toml", "HOMEBASE_REGISTRY_PATH": "nodes.toml"}
+        Path("settings.toml").write_text('role = "controller"\nnode_name = "control"\n', encoding="utf-8")
+        Path("nodes.toml").write_text(
+            '[[nodes]]\nname = "control"\nkind = "controller"\nruntime_role = "controller"\n'
+            '\n[[nodes]]\nname = "host"\nkind = "node"\nruntime_role = "managed"\naddress = "192.168.0.20"\nclient_port = 8428\nrole_groups = ["infra"]\n',
+            encoding="utf-8",
+        )
+        app = load_app(monkeypatch, "settings.toml")
+        monkeypatch.setattr(
+            "homebase_cli.cli.request_package_install",
+            lambda address, ref, repo_url, summary=None, port=8428: {
+                "installed_version": "0.1.29",
+                "requested_ref": ref,
+                "resolved_ref": "remote-commit",
+            },
+        )
+        result = runner.invoke(app, ["package", "install", "--group", "infra", "--ref", "v0.1.29"], env=env)
+        assert result.exit_code == 0
+        assert "host" in result.stdout
+        assert "v0.1.29" in result.stdout
     assert "Start with:" not in result.stdout
 
 

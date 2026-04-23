@@ -53,8 +53,11 @@ homebase link add app-tier host-group
 homebase inventory
 homebase inventory edit
 homebase package status host.app
+homebase package status --group app-tier
 homebase package install host.app --ref v0.1.1
+homebase package install --group app-tier --ref v0.1.1
 homebase package update host.app
+homebase package update --all
 ```
 
 Local package management:
@@ -64,6 +67,8 @@ homebase package versions
 homebase package status
 homebase package install --ref main
 homebase package update
+homebase package status --all
+homebase package update --group app-tier
 ```
 
 ## Development

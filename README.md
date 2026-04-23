@@ -79,19 +79,27 @@ Pairing flow:
 homebase package versions
 homebase package status
 homebase package status host.app
+homebase package status --group app-tier
+homebase package status --all
 homebase package install --ref v0.1.1
 homebase package install host.app --ref v0.1.1
+homebase package install --group app-tier --ref v0.1.1
 homebase package update
 homebase package update host.app
+homebase package update --group app-tier
+homebase package update --all
 ```
 
 What they do:
 
 - `versions`: list installable GitHub refs such as releases, tags, or the default branch
 - `status`: show what is installed on the current node
-- `status <resource>`: ask a paired node what is installed there
+- `status <resource>`: ask one paired node what is installed there
+- `status --group ...` / `status --all`: show installed revisions across selected groups or the whole registry
 - `install`: install a specific branch, tag, or commit
+- `install ... --group ...` / `install ... --all`: roll one selected ref to many nodes
 - `update`: move to the latest release, or the default branch if no release exists
+- `update ... --group ...` / `update ... --all`: update selected groups or the whole registry
 
 ## Inventory Commands
 
