@@ -52,7 +52,6 @@ homebase group add host-node
 homebase group add app-tier
 homebase link add host-node app-tier
 homebase node assign host.app app-tier
-homebase state set host.app status active
 ```
 
 On a managed node:
@@ -94,7 +93,7 @@ What they do:
 - `install`: install a specific branch, tag, or commit
 - `update`: move to the latest release, or the default branch if no release exists
 
-## Inventory And State Commands
+## Inventory Commands
 
 Use `homebase status` when you want one live overview of all registered nodes.
 
@@ -107,8 +106,8 @@ Use object commands when you want to inspect or change one area directly.
 ```bash
 homebase node list
 homebase node show host.app
-homebase node edit host.app name host.api
-homebase node edit host.app role managed
+homebase node edit host.app
+homebase role edit host.app
 homebase node assign host.app app-tier
 homebase node unassign host.app app-tier
 homebase group list
@@ -131,15 +130,6 @@ homebase inventory edit
 ```
 
 `homebase inventory` shows inventory help. `homebase inventory show` refreshes the ansible YAML and prints it. `homebase inventory edit` opens that YAML in your editor.
-
-`homebase state` stores simple key/value labels on registered nodes.
-
-```bash
-homebase state set host.app status active
-homebase state set host.app site home
-homebase state show host.app
-homebase state unset host.app site
-```
 
 ## Repository Layout
 

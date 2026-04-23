@@ -43,11 +43,10 @@ homebase role show host.app
 homebase role edit host.app managed
 homebase node show host.app
 homebase node assign host.app app-tier
-homebase node edit host.app name host.api
+homebase node edit host.app
 homebase link add app-tier host-group
 homebase inventory
 homebase inventory edit
-homebase state set host.app status active
 homebase package status host.app
 homebase package install host.app --ref v0.1.1
 homebase package update host.app

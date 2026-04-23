@@ -30,6 +30,7 @@ Current priority:
 - move background responsibilities under `service`
 - prepare the controller runtime for upcoming reverse proxy work
 - keep install and rollout behavior GitHub-ref driven
+- keep status output focused on usable exposure and runtime information rather than operator label fields
 
 ## Working Directory Policy
 

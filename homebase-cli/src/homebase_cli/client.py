@@ -70,6 +70,7 @@ class ClientProfile:
     version: str
     open_ports: tuple[int, ...] = ()
     services: tuple[str, ...] = ()
+    exposed_endpoints: tuple[tuple[int, str, str | None], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -306,8 +307,14 @@ def detect_exposed_endpoints() -> tuple[tuple[int, str, str | None], ...]:
         except ValueError:
             continue
         process_blob = " ".join(parts[5:]).strip()
-        owner_match = re.search(r'\(\("([^"]+)"', process_blob)
-        owner = owner_match.group(1).strip() if owner_match is not None else None
+        owner = None
+        for pattern in (r'users:\(\("([^"]+)"', r'\(\("([^"]+)"'):
+            owner_match = re.search(pattern, process_blob)
+            if owner_match is not None:
+                owner = owner_match.group(1).strip()
+                break
+        if owner is None and process_blob:
+            owner = process_blob.strip() or None
         endpoints[port] = (port, describe_port(port, owner), owner)
     return tuple(sorted(endpoints.values(), key=lambda item: item[0]))
 
@@ -360,13 +367,15 @@ def local_discovery() -> ClientDiscovery:
 def local_profile() -> ClientProfile:
     """Build the full client profile for paired controllers."""
     discovery = local_discovery()
+    exposed_endpoints = detect_exposed_endpoints()
     return ClientProfile(
         node_id=discovery.node_id,
         hostname=discovery.hostname,
         platform=discovery.platform,
         version=discovery.version,
-        open_ports=detect_open_ports(),
-        services=detect_exposed_services(),
+        open_ports=tuple(port for port, _, _ in exposed_endpoints),
+        services=tuple(dict.fromkeys(purpose for _, purpose, _ in exposed_endpoints)),
+        exposed_endpoints=exposed_endpoints,
     )
 
 
@@ -399,8 +408,23 @@ def parse_profile_payload(payload: dict[str, Any]) -> ClientProfile:
     discovery = parse_discovery_payload(payload)
     raw_open_ports = payload.get("open_ports", ())
     raw_services = payload.get("services", ())
+    raw_exposed_endpoints = payload.get("exposed_endpoints", ())
     open_ports = tuple(sorted(int(port) for port in raw_open_ports))
     services = tuple(str(service).strip() for service in raw_services if str(service).strip())
+    exposed_endpoints: list[tuple[int, str, str | None]] = []
+    for item in raw_exposed_endpoints:
+        if not isinstance(item, dict):
+            continue
+        try:
+            port_value = int(item.get("port"))
+        except (TypeError, ValueError):
+            continue
+        purpose = str(item.get("purpose", "")).strip() or describe_port(port_value)
+        owner_raw = item.get("owner")
+        owner = str(owner_raw).strip() if owner_raw not in (None, "") else None
+        exposed_endpoints.append((port_value, purpose, owner))
+    if not exposed_endpoints and open_ports:
+        exposed_endpoints = [(port, describe_port(port), None) for port in open_ports]
     return ClientProfile(
         node_id=discovery.node_id,
         hostname=discovery.hostname,
@@ -408,6 +432,7 @@ def parse_profile_payload(payload: dict[str, Any]) -> ClientProfile:
         version=discovery.version,
         open_ports=open_ports,
         services=services,
+        exposed_endpoints=tuple(sorted(exposed_endpoints, key=lambda item: item[0])),
     )
 
 

@@ -47,10 +47,6 @@ def render_ansible_inventory(nodes: tuple[Node, ...], role_groups: tuple[RoleGro
             lines.append("          homebase_groups:")
             for group in node.role_groups:
                 lines.append(f"            - {group}")
-        if node.states:
-            lines.append("          homebase_state:")
-            for key, value in node.states:
-                lines.append(f'            {key}: "{value}"')
     if role_groups:
         lines.append("    homebase_groups:")
         lines.append("      children:")

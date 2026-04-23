@@ -9,7 +9,6 @@ import subprocess
 import socket
 import sys
 import time
-from typing import Sequence
 from datetime import UTC, datetime
 
 import click
@@ -22,6 +21,7 @@ from homebase_cli.client import (
     ConnectRuntime,
     CONNECT_LOG_PATH,
     DEFAULT_CLIENT_PORT,
+    detect_exposed_endpoints,
     describe_port,
     detect_primary_address,
     detect_running_services,
@@ -66,10 +66,8 @@ from homebase_cli.registry import (
     remove_role_group,
     set_role_group_description,
     set_node_runtime_role,
-    set_node_state,
     unassign_node_role_group,
     unlink_role_group,
-    unset_node_state,
 )
 from homebase_cli.resources import all_resources, child_resources, find_resource
 from homebase_cli.scanner import (
@@ -122,10 +120,6 @@ inventory_app = typer.Typer(
     invoke_without_command=True,
     help="Work with the rendered ansible inventory file.",
 )
-state_app = typer.Typer(
-    invoke_without_command=True,
-    help="Save simple labels or operator state on registered nodes.",
-)
 package_app = typer.Typer(
     invoke_without_command=True,
     help="Check the installed homebase revision and install or update from GitHub.",
@@ -145,13 +139,6 @@ def _show_group_help(ctx: typer.Context) -> None:
         return
     console.print(ctx.get_help())
     raise typer.Exit(code=0)
-
-
-def _state_summary(states: Sequence[tuple[str, str]]) -> str:
-    """Render one compact saved-state summary."""
-    if not states:
-        return ""
-    return ", ".join(f"{key}={value}" for key, value in states)
 
 
 def _group_parents(group_name: str) -> list[str]:
@@ -187,6 +174,22 @@ def _format_port_summary(ports: Sequence[int]) -> str:
     return ", ".join(f"{port} {describe_port(port)}" for port in ports)
 
 
+def _format_exposure_summary(endpoints: Sequence[tuple[int, str, str | None]]) -> str:
+    """Render exposed endpoints as concise purpose:port entries."""
+    if not endpoints:
+        return ""
+    return ", ".join(f"{purpose}:{port}" for port, purpose, _ in endpoints)
+
+
+def _format_endpoint_details(endpoints: Sequence[tuple[int, str, str | None]]) -> str:
+    """Render endpoint details for one node view."""
+    if not endpoints:
+        return ""
+    return "\n".join(
+        f"{port} -> {purpose}{f' ({owner})' if owner else ''}" for port, purpose, owner in endpoints
+    )
+
+
 def _inventory_nodes():
     """Return registered nodes, keeping the local node visible."""
     nodes = list(load_nodes())
@@ -202,8 +205,10 @@ def _inventory_nodes():
                     runtime_hostname=profile.hostname,
                     address=detect_primary_address() or None,
                     platform=profile.platform,
+                    client_port=DEFAULT_CLIENT_PORT,
                     open_ports=profile.open_ports,
                     services=profile.services,
+                    exposed_endpoints=profile.exposed_endpoints,
                 )
             )
         except Exception:
@@ -301,6 +306,9 @@ def _show_node_details(node_name: str) -> None:
     open_ports = node.open_ports or (local_profile_data.open_ports if local_profile_data is not None else ())
     services = node.services or (local_profile_data.services if local_profile_data is not None else ())
     all_services = tuple(detect_running_services()) if local_profile_data is not None else services
+    exposed_endpoints = detect_exposed_endpoints() if local_profile_data is not None else (
+        node.exposed_endpoints or tuple((port, describe_port(port), None) for port in open_ports)
+    )
     address_value = node.address or (detect_primary_address() if local_profile_data is not None else None) or ""
     console.print(f"[bold]Node: {_node_label(node.name)}[/bold]")
 
@@ -325,7 +333,6 @@ def _show_node_details(node_name: str) -> None:
     runtime.add_row("external services", ", ".join(services))
     runtime.add_row("all services", ", ".join(all_services))
     runtime.add_row("groups", ", ".join(node.role_groups) if node.role_groups else "")
-    runtime.add_row("states", _state_summary(node.states))
     console.print("[bold]Runtime[/bold]")
     console.print(runtime)
 
@@ -334,7 +341,7 @@ def _show_node_details(node_name: str) -> None:
     network.add_column("Value")
     network.add_row("address", address_value)
     network.add_row("connect port", str(node.client_port) if node.client_port is not None else "")
-    network.add_row("open ports", _format_port_summary(open_ports))
+    network.add_row("exposed endpoints", _format_endpoint_details(exposed_endpoints))
     console.print("[bold]Network[/bold]")
     console.print(network)
 
@@ -373,10 +380,8 @@ def _print_registered_overview() -> None:
     table.add_column("Hostname")
     table.add_column("OS")
     table.add_column("Service")
-    table.add_column("Open Ports")
-    table.add_column("Services")
+    table.add_column("Exposure")
     table.add_column("Groups")
-    table.add_column("State")
     current_name = _current_node_name()
     if not nodes:
         console.print("registered nodes: none")
@@ -388,6 +393,9 @@ def _print_registered_overview() -> None:
                 local_profile_data = local_profile()
             except Exception:
                 local_profile_data = None
+        exposed_endpoints = detect_exposed_endpoints() if local_profile_data is not None else (
+            node.exposed_endpoints or tuple((port, describe_port(port), None) for port in (node.open_ports or ()))
+        )
         table.add_row(
             _node_label(node.name),
             node.runtime_role,
@@ -395,10 +403,8 @@ def _print_registered_overview() -> None:
             node.runtime_hostname or (local_profile_data.hostname if local_profile_data is not None else ""),
             node.platform or (local_profile_data.platform if local_profile_data is not None else ""),
             _node_service_state(node.name),
-            _format_port_summary(node.open_ports or (local_profile_data.open_ports if local_profile_data is not None else ())),
-            ", ".join(node.services or (local_profile_data.services if local_profile_data is not None else ())),
+            _format_exposure_summary(exposed_endpoints),
             ", ".join(node.role_groups) if node.role_groups else "",
-            _state_summary(node.states),
         )
     console.print(table)
 
@@ -416,9 +422,8 @@ def _print_managed_overview() -> None:
     table.add_column("Hostname")
     table.add_column("OS")
     table.add_column("Service")
-    table.add_column("Open Ports")
-    table.add_column("Services")
-    table.add_column("State")
+    table.add_column("Exposure")
+    exposed_endpoints = detect_exposed_endpoints()
     table.add_row(
         f"{local_name} (local)",
         _current_runtime_role() or "managed",
@@ -426,9 +431,7 @@ def _print_managed_overview() -> None:
         profile.hostname,
         profile.platform,
         "running" if runtime is not None else "stopped",
-        _format_port_summary(profile.open_ports),
-        ", ".join(profile.services),
-        "self",
+        _format_exposure_summary(exposed_endpoints),
     )
     for controller in state.paired_controllers:
         table.add_row(
@@ -439,8 +442,6 @@ def _print_managed_overview() -> None:
             "",
             "",
             "",
-            "",
-            "paired controller",
         )
     console.print("[bold]Node status[/bold]")
     console.print(table)
@@ -515,15 +516,6 @@ def group_callback(ctx: typer.Context) -> None:
 def link_callback(ctx: typer.Context) -> None:
     """Show help when link is called without a subcommand."""
     _show_group_help(ctx)
-
-
-@state_app.callback()
-def state_callback(ctx: typer.Context) -> None:
-    """Show standard help when state is called without a subcommand."""
-    if ctx.invoked_subcommand is not None:
-        return
-    console.print(ctx.get_help())
-    raise typer.Exit(code=0)
 
 
 @service_app.callback()
@@ -702,6 +694,7 @@ def node_add_command(
             client_port=client_port,
             open_ports=profile.open_ports,
             services=profile.services,
+            exposed_endpoints=profile.exposed_endpoints,
         )
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
@@ -942,6 +935,10 @@ def client_profile_command() -> None:
             "version": profile.version,
             "open_ports": list(profile.open_ports),
             "services": list(profile.services),
+            "exposed_endpoints": [
+                {"port": port, "purpose": purpose, "owner": owner}
+                for port, purpose, owner in profile.exposed_endpoints
+            ],
         },
         indent=2,
         sort_keys=True,
@@ -1451,54 +1448,6 @@ def inventory_edit_command() -> None:
     console.print(f"[green]Opened ansible inventory:[/green] {target}")
 
 
-@state_app.command("show")
-def state_show_command(resource: str = typer.Argument(..., help="Resource path such as host.app.")) -> None:
-    """Show saved operator state values for one registered node."""
-    _require_role("controller")
-    node = find_node(resource)
-    if node is None:
-        raise typer.BadParameter(f"unknown node: {resource}")
-    states = node.states
-    if not states:
-        console.print("[yellow]No state values saved yet.[/yellow]")
-        return
-    table = Table(show_header=True, header_style="bold")
-    table.add_column("Key")
-    table.add_column("Value")
-    for key, value in states:
-        table.add_row(key, value)
-    console.print(table)
-
-
-@state_app.command("set")
-def state_set_command(
-    resource: str = typer.Argument(..., help="Resource path such as host.app."),
-    key: str = typer.Argument(..., help="State key."),
-    value: str = typer.Argument(..., help="State value."),
-) -> None:
-    """Set one saved operator state value on one registered node."""
-    _require_role("controller")
-    try:
-        set_node_state(resource, key, value)
-    except ValueError as exc:
-        raise typer.BadParameter(str(exc)) from exc
-    console.print(f"[green]Set state:[/green] {resource} {key}={value}")
-
-
-@state_app.command("unset")
-def state_unset_command(
-    resource: str = typer.Argument(..., help="Resource path such as host.app."),
-    key: str = typer.Argument(..., help="State key."),
-) -> None:
-    """Remove one saved operator state value from one registered node."""
-    _require_role("controller")
-    try:
-        unset_node_state(resource, key)
-    except ValueError as exc:
-        raise typer.BadParameter(str(exc)) from exc
-    console.print(f"[green]Removed state:[/green] {resource} {key}")
-
-
 @package_app.command("status")
 def package_status_command(
     resource: str | None = typer.Argument(None, help="Optional resource path."),
@@ -1847,7 +1796,6 @@ def _build_root_app() -> typer.Typer:
         runtime_app.add_typer(_build_group_app(), name="group")
         runtime_app.add_typer(_build_link_app(), name="link")
         runtime_app.add_typer(inventory_app, name="inventory")
-        runtime_app.add_typer(state_app, name="state")
     return runtime_app
 
 

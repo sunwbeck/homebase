@@ -221,11 +221,20 @@ def test_root_help_for_managed_hides_controller_only_commands(monkeypatch) -> No
         assert "│ group" not in result.stdout
         assert "│ link " not in result.stdout
         assert "│ inventory" not in result.stdout
-        assert "│ state" not in result.stdout
         assert "│ connect" in result.stdout
         assert "│ service" in result.stdout
         assert "│ package" in result.stdout
         assert "│ role" in result.stdout
+
+
+def test_root_help_for_controller_hides_removed_state_command(monkeypatch) -> None:
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        Path("settings.toml").write_text('role = "controller"\nnode_name = "control"\n', encoding="utf-8")
+        app = load_app(monkeypatch, "settings.toml")
+        result = runner.invoke(app, ["--help"], env={"HOMEBASE_SETTINGS_PATH": "settings.toml"})
+        assert result.exit_code == 0
+        assert "│ state" not in result.stdout
 
 
 def test_init_help_explains_role_and_name(monkeypatch) -> None:
@@ -278,7 +287,8 @@ def test_status_shows_local_node(monkeypatch) -> None:
         assert "Node status" in status_result.stdout
         assert "control" in status_result.stdout
         assert "controller" in status_result.stdout
-        assert "ssh" in status_result.stdout or "homebase" in status_result.stdout or "Open Ports" in status_result.stdout
+        assert "Exposure" in status_result.stdout
+        assert "State" not in status_result.stdout
 
 
 def test_managed_status_shows_self_and_paired_controllers(monkeypatch) -> None:
@@ -301,6 +311,10 @@ def test_managed_status_shows_self_and_paired_controllers(monkeypatch) -> None:
         monkeypatch.setattr("homebase_cli.cli.detect_primary_address", lambda: "192.168.0.20")
         monkeypatch.setattr("homebase_cli.cli.connect_server_running", lambda: None)
         monkeypatch.setattr(
+            "homebase_cli.cli.detect_exposed_endpoints",
+            lambda: ((22, "ssh", "sshd"), (8428, "homebase", "python")),
+        )
+        monkeypatch.setattr(
             "homebase_cli.cli.load_client_state",
             lambda: ClientState(
                 pair_code="12345678",
@@ -319,7 +333,9 @@ def test_managed_status_shows_self_and_paired_controllers(monkeypatch) -> None:
         assert "192.168.0.20" in result.stdout
         assert "control" in result.stdout
         assert "192.168.0.10" in result.stdout
-        assert "paired controller" in result.stdout
+        assert "ssh:22" in result.stdout
+        assert "homebase:8428" in result.stdout
+        assert "State" not in result.stdout
 
 
 def test_service_status_includes_local_identity(monkeypatch) -> None:
@@ -407,6 +423,34 @@ def test_node_list_shows_address_and_description(monkeypatch) -> None:
         assert "Description" in result.stdout
         assert "192.168.0.20" in result.stdout
         assert "application vm" in result.stdout
+
+
+def test_node_show_uses_endpoint_details_without_states(monkeypatch) -> None:
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        env = {"HOMEBASE_SETTINGS_PATH": "settings.toml", "HOMEBASE_REGISTRY_PATH": "nodes.toml", "COLUMNS": "240"}
+        Path("settings.toml").write_text('role = "controller"\nnode_name = "control"\n', encoding="utf-8")
+        Path("nodes.toml").write_text(
+            '\n'.join(
+                [
+                    '[[nodes]]',
+                    'name = "app"',
+                    'kind = "vm"',
+                    'runtime_role = "managed"',
+                    'runtime_hostname = "app"',
+                    'address = "192.168.0.20"',
+                    'exposed_endpoints = ["22|ssh|sshd", "8428|homebase|python"]',
+                    '',
+                ]
+            ),
+            encoding="utf-8",
+        )
+        app = load_app(monkeypatch, "settings.toml")
+        result = runner.invoke(app, ["node", "show", "app"], env=env)
+        assert result.exit_code == 0
+        assert "22 -> ssh (sshd)" in result.stdout
+        assert "8428 -> homebase (python)" in result.stdout
+        assert "states" not in result.stdout.lower()
 
 
 def test_group_edit_without_args_prompts_for_group_and_field(monkeypatch) -> None:
