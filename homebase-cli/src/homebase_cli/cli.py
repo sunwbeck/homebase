@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
+import subprocess
 import socket
 import sys
+import time
 from typing import Sequence
+from datetime import UTC, datetime
 
 import typer
 from rich.progress import BarColumn, Progress, TaskID, SpinnerColumn, TaskProgressColumn, TextColumn
@@ -14,13 +18,20 @@ from rich.table import Table
 from rich.console import Console
 
 from homebase_cli.client import (
+    ConnectRuntime,
+    CONNECT_LOG_PATH,
     DEFAULT_CLIENT_PORT,
     detect_primary_address,
+    connect_server_running,
+    clear_connect_runtime,
     discovery_payload,
     local_profile,
     load_client_state,
+    load_connect_runtime,
     refresh_pair_code,
     serve_client,
+    save_connect_runtime,
+    stop_connect_server,
 )
 from homebase_cli.docs_reader import docs_root, get_doc, list_docs
 from homebase_cli.inventory import ansible_inventory_path, ansible_ping, open_ansible_inventory, write_ansible_inventory
@@ -78,13 +89,12 @@ from homebase_cli.settings import (
 
 
 app = typer.Typer(no_args_is_help=True, help="Manage homebase controller and managed nodes.")
-connect_app = typer.Typer(invoke_without_command=True, help="Discover and register managed nodes.")
+connect_app = typer.Typer(invoke_without_command=True, help="Connect controllers and managed nodes.")
 node_app = typer.Typer(invoke_without_command=True, help="Inspect and manage registered nodes.")
 group_app = typer.Typer(invoke_without_command=True, help="Inspect and manage groups.")
 link_app = typer.Typer(invoke_without_command=True, help="Inspect and manage parent-child group links.")
 role_app = typer.Typer(invoke_without_command=True, help="Show or change the local role: controller or managed.")
 ansible_app = typer.Typer(help="Run ansible-related helper commands.")
-client_app = typer.Typer(help="Run the homebase client service on one managed node.")
 inventory_app = typer.Typer(invoke_without_command=True, help="Show or open the ansible inventory YAML.")
 state_app = typer.Typer(invoke_without_command=True, help="Store and inspect saved state values for registered nodes.")
 package_app = typer.Typer(
@@ -624,14 +634,14 @@ def docs_command(doc: str | None = typer.Argument(None, help="Optional docs key 
     console.print(f"summary: {entry.summary}")
 
 
-@client_app.command("identity")
+@connect_app.command("identity", hidden=True)
 def client_identity_command() -> None:
     """Print the local homebase client discovery payload as JSON."""
     _require_role("managed")
     console.print(json.dumps(discovery_payload(), indent=2, sort_keys=True))
 
 
-@client_app.command("code")
+@connect_app.command("code")
 def client_code_command(
     refresh: bool = typer.Option(False, "--refresh", help="Generate a new 8-digit pairing code before printing it."),
 ) -> None:
@@ -641,7 +651,7 @@ def client_code_command(
     console.print(state.pair_code)
 
 
-@client_app.command("profile")
+@connect_app.command("profile", hidden=True)
 def client_profile_command() -> None:
     """Print the local paired profile only for local inspection."""
     _require_role("managed")
@@ -660,14 +670,96 @@ def client_profile_command() -> None:
     ))
 
 
-@client_app.command("serve")
+@connect_app.command("serve")
 def client_serve_command(
     host: str = typer.Option("0.0.0.0", "--host", help="Listen address for the client endpoint."),
     port: int = typer.Option(DEFAULT_CLIENT_PORT, "--port", help="Listen port for the client endpoint."),
+    foreground: bool = typer.Option(False, "--foreground", hidden=True),
 ) -> None:
-    """Serve the local homebase client identity over HTTP."""
+    """Serve the local homebase connect endpoint."""
     _require_role("managed")
+    if foreground:
+        clear_connect_runtime()
+        console.print(f"serving homebase client on {host}:{port}")
+        try:
+            serve_client(host=host, port=port)
+        except OSError as exc:
+            console.print(f"[red]connect serve failed:[/red] {exc}")
+            raise typer.Exit(code=1)
+        return
+    running = connect_server_running()
+    if running is not None:
+        console.print(f"[yellow]homebase connect server already running[/yellow] on {running.host}:{running.port} (pid {running.pid})")
+        return
+    CONNECT_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    log_handle = CONNECT_LOG_PATH.open("a", encoding="utf-8")
+    env = os.environ.copy()
+    command = [
+        sys.executable,
+        "-m",
+        "homebase_cli.cli",
+        "connect",
+        "serve",
+        "--host",
+        host,
+        "--port",
+        str(port),
+        "--foreground",
+    ]
+    process = subprocess.Popen(
+        command,
+        stdout=log_handle,
+        stderr=log_handle,
+        stdin=subprocess.DEVNULL,
+        start_new_session=True,
+        env=env,
+    )
+    log_handle.close()
+    save_connect_runtime(
+        ConnectRuntime(
+            pid=process.pid,
+            host=host,
+            port=port,
+            started_at=datetime.now(UTC).isoformat(),
+            log_path=str(CONNECT_LOG_PATH),
+        )
+    )
+    time.sleep(0.2)
+    if process.poll() is not None:
+        clear_connect_runtime()
+        console.print(f"[red]connect serve failed[/red]")
+        console.print(f"log: {CONNECT_LOG_PATH}")
+        raise typer.Exit(code=1)
     console.print(f"serving homebase client on {host}:{port}")
+    console.print(f"background pid: {process.pid}")
+    console.print(f"log: {CONNECT_LOG_PATH}")
+
+
+@connect_app.command("status")
+def connect_status_command() -> None:
+    """Show the managed connect server status on this node."""
+    _require_role("managed")
+    runtime = connect_server_running()
+    if runtime is None:
+        console.print("connect server: stopped")
+        return
+    console.print("connect server: running")
+    console.print(f"host: {runtime.host}")
+    console.print(f"port: {runtime.port}")
+    console.print(f"pid: {runtime.pid}")
+    console.print(f"started at: {runtime.started_at}")
+    console.print(f"log: {runtime.log_path}")
+
+
+@connect_app.command("stop")
+def connect_stop_command() -> None:
+    """Stop the managed connect server on this node."""
+    _require_role("managed")
+    runtime = stop_connect_server()
+    if runtime is None:
+        console.print("connect server: stopped")
+        return
+    console.print(f"stopped connect server on {runtime.host}:{runtime.port} (pid {runtime.pid})")
     serve_client(host=host, port=port)
 
 
@@ -1341,15 +1433,6 @@ def dev_self_test_command() -> None:
     console.print(f"version: {result.version}")
 
 
-def _build_client_app() -> typer.Typer:
-    runtime_client_app = typer.Typer(help="Run the homebase client service on one managed node.")
-    runtime_client_app.command("code")(client_code_command)
-    runtime_client_app.command("serve")(client_serve_command)
-    runtime_client_app.command("profile", hidden=True)(client_profile_command)
-    runtime_client_app.command("identity", hidden=True)(client_identity_command)
-    return runtime_client_app
-
-
 def _build_node_app() -> typer.Typer:
     runtime_node_app = typer.Typer(invoke_without_command=True, help="Inspect and manage registered nodes.")
     runtime_node_app.callback()(node_callback)
@@ -1362,12 +1445,16 @@ def _build_node_app() -> typer.Typer:
 
 
 def _build_connect_app() -> typer.Typer:
-    runtime_connect_app = typer.Typer(invoke_without_command=True, help="Discover and register managed nodes.")
+    runtime_connect_app = typer.Typer(invoke_without_command=True, help="Connect controllers and managed nodes.")
     runtime_connect_app.callback()(connect_callback)
     runtime_connect_app.command("scan")(node_scan_command)
     runtime_connect_app.command("add")(node_add_command)
     runtime_connect_app.command("code")(client_code_command)
     runtime_connect_app.command("serve")(client_serve_command)
+    runtime_connect_app.command("status")(connect_status_command)
+    runtime_connect_app.command("stop")(connect_stop_command)
+    runtime_connect_app.command("profile", hidden=True)(client_profile_command)
+    runtime_connect_app.command("identity", hidden=True)(client_identity_command)
     return runtime_connect_app
 
 
@@ -1426,6 +1513,7 @@ def _build_root_app() -> typer.Typer:
     runtime_app = typer.Typer(no_args_is_help=True, help="Manage homebase controller and managed nodes.")
     runtime_app.command("init")(init_command)
     current_role = _current_runtime_role()
+    runtime_app.add_typer(_build_connect_app(), name="connect")
     if current_role in (None, "controller"):
         runtime_app.command("status")(status_command)
         runtime_app.add_typer(_build_role_app(), name="role")
@@ -1433,10 +1521,7 @@ def _build_root_app() -> typer.Typer:
         runtime_app.add_typer(_build_group_app(), name="group")
         runtime_app.add_typer(_build_link_app(), name="link")
         runtime_app.add_typer(inventory_app, name="inventory")
-        runtime_app.add_typer(_build_connect_app(), name="connect")
         runtime_app.add_typer(state_app, name="state")
-    if current_role in (None, "managed"):
-        runtime_app.add_typer(_build_client_app(), name="client")
     runtime_app.add_typer(_build_package_app(), name="package")
     runtime_app.add_typer(_build_dev_app(), name="dev")
     return runtime_app

@@ -8,7 +8,7 @@ What it does:
 
 - discovers and registers managed nodes
 - shows node information and basic status
-- runs a small client service on each managed node
+- runs a small connect service on each managed node
 - installs and updates `homebase` from GitHub refs
 - lets the controller node request installs and updates on other paired nodes
 
@@ -47,14 +47,14 @@ On a managed node:
 
 ```bash
 homebase init
-homebase client code --refresh
-homebase client serve
+homebase connect code --refresh
+homebase connect serve
 ```
 
 Pairing flow:
 
-1. start `homebase client serve` on the target node
-2. read the 8-digit code from `homebase client code --refresh`
+1. start `homebase connect serve` on the target node
+2. read the 8-digit code from `homebase connect code --refresh`
 3. run `homebase node scan` on the controller node
 4. run `homebase node add` on the controller node and enter the code
 

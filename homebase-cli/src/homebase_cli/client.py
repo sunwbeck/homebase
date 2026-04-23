@@ -12,11 +12,13 @@ import os
 from pathlib import Path
 import platform as platform_module
 import secrets
+import signal
 import socket
 import subprocess
 from typing import Any
 
 from homebase_cli.packaging import DEFAULT_REPO_URL, load_install_state, install_github_ref, latest_github_version
+from homebase_cli.paths import LOCAL_CLI_ROOT
 
 
 DEFAULT_CLIENT_PORT = 8428
@@ -28,6 +30,8 @@ PACKAGE_STATUS_PATH = "/package/status"
 PACKAGE_INSTALL_PATH = "/package/install"
 PACKAGE_UPGRADE_PATH = "/package/upgrade"
 CLIENT_STATE_PATH = Path.home() / ".config" / "homebase" / "client-state.json"
+CONNECT_RUNTIME_PATH = LOCAL_CLI_ROOT / "run" / "connect-server.json"
+CONNECT_LOG_PATH = LOCAL_CLI_ROOT / "logs" / "connect-server.log"
 
 
 @dataclass(frozen=True)
@@ -78,12 +82,82 @@ class PackageInstallRequest:
     include_prerelease: bool = False
 
 
+@dataclass(frozen=True)
+class ConnectRuntime:
+    """One persisted managed connect server runtime."""
+
+    pid: int
+    host: str
+    port: int
+    started_at: str
+    log_path: str
+
+
 def cli_version() -> str:
     """Return the installed CLI version when available."""
     try:
         return version("homebase-cli")
     except PackageNotFoundError:
         return "0.1.0-dev"
+
+
+def load_connect_runtime(path: Path | None = None) -> ConnectRuntime | None:
+    """Load the persisted managed connect server runtime."""
+    target = path or CONNECT_RUNTIME_PATH
+    if not target.exists():
+        return None
+    payload = json.loads(target.read_text(encoding="utf-8"))
+    return ConnectRuntime(
+        pid=int(payload["pid"]),
+        host=str(payload["host"]),
+        port=int(payload["port"]),
+        started_at=str(payload["started_at"]),
+        log_path=str(payload["log_path"]),
+    )
+
+
+def save_connect_runtime(runtime: ConnectRuntime, path: Path | None = None) -> Path:
+    """Persist the managed connect server runtime."""
+    target = path or CONNECT_RUNTIME_PATH
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(asdict(runtime), indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return target
+
+
+def clear_connect_runtime(path: Path | None = None) -> None:
+    """Remove the persisted managed connect server runtime when present."""
+    target = path or CONNECT_RUNTIME_PATH
+    try:
+        target.unlink()
+    except FileNotFoundError:
+        return
+
+
+def connect_server_running(path: Path | None = None) -> ConnectRuntime | None:
+    """Return the runtime when the managed connect server PID is alive."""
+    runtime = load_connect_runtime(path)
+    if runtime is None:
+        return None
+    try:
+        os.kill(runtime.pid, 0)
+    except OSError:
+        clear_connect_runtime(path)
+        return None
+    return runtime
+
+
+def stop_connect_server(path: Path | None = None) -> ConnectRuntime | None:
+    """Stop the background managed connect server when running."""
+    runtime = connect_server_running(path)
+    if runtime is None:
+        return None
+    try:
+        os.kill(runtime.pid, signal.SIGTERM)
+    except OSError:
+        clear_connect_runtime(path)
+        return None
+    clear_connect_runtime(path)
+    return runtime
 
 
 def read_machine_id() -> str | None:
