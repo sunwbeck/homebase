@@ -1,6 +1,6 @@
 [project]
 name = "homebase-cli"
-version = "0.1.17"
+version = "0.1.19"
 description = "CLI workspace for homebase."
 requires-python = ">=3.11"
 dependencies = [

@@ -14,6 +14,7 @@ import platform as platform_module
 import re
 import secrets
 import signal
+import shutil
 import socket
 import subprocess
 from typing import Any
@@ -31,6 +32,8 @@ HEALTH_PATH = "/health"
 PACKAGE_STATUS_PATH = "/package/status"
 PACKAGE_INSTALL_PATH = "/package/install"
 PACKAGE_UPGRADE_PATH = "/package/upgrade"
+SERVICE_START_PATH = "/service/start"
+SERVICE_STOP_PATH = "/service/stop"
 CLIENT_STATE_PATH = Path.home() / ".config" / "homebase" / "client-state.json"
 CONNECT_RUNTIME_PATH = LOCAL_CLI_ROOT / "run" / "connect-server.json"
 CONNECT_LOG_PATH = LOCAL_CLI_ROOT / "logs" / "connect-server.log"
@@ -60,6 +63,7 @@ class ClientProfile:
     open_ports: tuple[int, ...] = ()
     services: tuple[str, ...] = ()
     exposed_endpoints: tuple[tuple[int, str, str | None], ...] = ()
+    service_records: tuple[tuple[str, str, int | None, str, str], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -107,6 +111,13 @@ class ConnectRuntime:
     port: int
     started_at: str
     log_path: str
+
+
+@dataclass(frozen=True)
+class ServiceActionRequest:
+    """Remote service start/stop request from one paired controller."""
+
+    service: str
 
 
 def cli_version() -> str:
@@ -372,6 +383,66 @@ def detect_running_services() -> tuple[str, ...]:
     return tuple(sorted(dict.fromkeys(services)))
 
 
+def detect_service_records() -> tuple[tuple[str, str, int | None, str, str], ...]:
+    """Return generic service records from systemd and docker when available."""
+    records: dict[tuple[str, str], tuple[str, str, int | None, str, str]] = {}
+
+    systemctl = shutil.which("systemctl")
+    if systemctl is not None:
+        proc = subprocess.run(
+            [systemctl, "list-units", "--type=service", "--all", "--plain", "--no-legend", "--no-pager"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if proc.returncode == 0:
+            for line in proc.stdout.splitlines():
+                parts = line.split()
+                if len(parts) < 4:
+                    continue
+                unit = parts[0].strip()
+                if not unit.endswith(".service"):
+                    continue
+                name = unit.removesuffix(".service")
+                active = parts[2].strip().lower()
+                sub = parts[3].strip().lower()
+                state = "running" if active == "active" and sub == "running" else sub or active or "unknown"
+                description = " ".join(parts[4:]).strip()
+                pid: int | None = None
+                show_proc = subprocess.run(
+                    [systemctl, "show", unit, "--property=MainPID", "--value"],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+                if show_proc.returncode == 0:
+                    pid_text = show_proc.stdout.strip()
+                    if pid_text.isdigit() and pid_text != "0":
+                        pid = int(pid_text)
+                records[("systemd", unit)] = (name, state, pid, "systemd", description)
+
+    docker = shutil.which("docker")
+    if docker is not None:
+        proc = subprocess.run(
+            [docker, "ps", "-a", "--format", "{{.Names}}\t{{.State}}\t{{.Status}}"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if proc.returncode == 0:
+            for line in proc.stdout.splitlines():
+                parts = line.split("\t")
+                if len(parts) < 3:
+                    continue
+                name = parts[0].strip()
+                state = parts[1].strip().lower() or "unknown"
+                status = parts[2].strip()
+                if name:
+                    records[("docker", name)] = (name, state, None, "docker", status)
+
+    return tuple(sorted(records.values(), key=lambda item: (item[3], item[0])))
+
+
 def local_discovery() -> ClientDiscovery:
     """Build the minimal discovery payload."""
     hostname = socket.gethostname().strip() or "unknown"
@@ -392,6 +463,7 @@ def local_profile() -> ClientProfile:
     """Build the full client profile for paired controllers."""
     discovery = local_discovery()
     exposed_endpoints = detect_exposed_endpoints()
+    service_records = detect_service_records()
     return ClientProfile(
         node_id=discovery.node_id,
         hostname=discovery.hostname,
@@ -399,8 +471,9 @@ def local_profile() -> ClientProfile:
         version=discovery.version,
         description=discovery.description,
         open_ports=tuple(port for port, _, _ in exposed_endpoints),
-        services=tuple(dict.fromkeys(purpose for _, purpose, _ in exposed_endpoints)),
+        services=tuple(dict.fromkeys([name for name, state, _, _, _ in service_records if state == "running"])),
         exposed_endpoints=exposed_endpoints,
+        service_records=service_records,
     )
 
 
@@ -436,6 +509,7 @@ def parse_profile_payload(payload: dict[str, Any]) -> ClientProfile:
     raw_open_ports = payload.get("open_ports", ())
     raw_services = payload.get("services", ())
     raw_exposed_endpoints = payload.get("exposed_endpoints", ())
+    raw_service_records = payload.get("service_records", ())
     open_ports = tuple(sorted(int(port) for port in raw_open_ports))
     services = tuple(str(service).strip() for service in raw_services if str(service).strip())
     exposed_endpoints: list[tuple[int, str, str | None]] = []
@@ -452,6 +526,20 @@ def parse_profile_payload(payload: dict[str, Any]) -> ClientProfile:
         exposed_endpoints.append((port_value, purpose, owner))
     if not exposed_endpoints and open_ports:
         exposed_endpoints = [(port, describe_port(port), None) for port in open_ports]
+    service_records: list[tuple[str, str, int | None, str, str]] = []
+    for item in raw_service_records:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name", "")).strip()
+        state = str(item.get("state", "")).strip() or "unknown"
+        kind = str(item.get("kind", "")).strip() or "service"
+        description = str(item.get("description", "")).strip()
+        pid_raw = item.get("pid")
+        pid = int(pid_raw) if isinstance(pid_raw, int) or (isinstance(pid_raw, str) and str(pid_raw).isdigit()) else None
+        if name:
+            service_records.append((name, state, pid, kind, description))
+    if not service_records and services:
+        service_records = [(service, "running", None, "service", "") for service in services]
     return ClientProfile(
         node_id=discovery.node_id,
         hostname=discovery.hostname,
@@ -461,6 +549,7 @@ def parse_profile_payload(payload: dict[str, Any]) -> ClientProfile:
         open_ports=open_ports,
         services=services,
         exposed_endpoints=tuple(sorted(exposed_endpoints, key=lambda item: item[0])),
+        service_records=tuple(sorted(service_records, key=lambda item: (item[3], item[0]))),
     )
 
 
@@ -577,7 +666,19 @@ def discovery_payload() -> dict[str, Any]:
 
 def profile_payload() -> dict[str, Any]:
     """Return the current full profile payload."""
-    return asdict(local_profile())
+    profile = local_profile()
+    payload = asdict(profile)
+    payload["service_records"] = [
+        {
+            "name": name,
+            "state": state,
+            "pid": pid,
+            "kind": kind,
+            "description": description,
+        }
+        for name, state, pid, kind, description in profile.service_records
+    ]
+    return payload
 
 
 def package_status_payload() -> dict[str, Any]:
@@ -591,6 +692,57 @@ def package_status_payload() -> dict[str, Any]:
         "summary": status.summary,
         "installed_at": status.installed_at,
     }
+
+
+def parse_service_action_request(payload: dict[str, Any]) -> ServiceActionRequest:
+    """Validate one remote service action request."""
+    service = str(payload.get("service", "")).strip()
+    if not service:
+        raise ValueError("service action request is missing service")
+    return ServiceActionRequest(service=service)
+
+
+def control_service(service: str, action: str) -> None:
+    """Start or stop one service using generic systemd/docker backends."""
+    normalized_action = action.strip().lower()
+    if normalized_action not in {"start", "stop"}:
+        raise ValueError(f"unsupported service action: {action}")
+    target = service.strip()
+    if not target:
+        raise ValueError("service name cannot be empty")
+
+    systemctl = shutil.which("systemctl")
+    if systemctl is not None:
+        unit = target if target.endswith(".service") else f"{target}.service"
+        probe = subprocess.run(
+            [systemctl, "status", unit],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            text=True,
+        )
+        if probe.returncode in {0, 3, 4}:
+            result = subprocess.run([systemctl, normalized_action, unit], check=False, capture_output=True, text=True)
+            if result.returncode != 0:
+                raise RuntimeError(result.stderr.strip() or result.stdout.strip() or f"failed to {normalized_action} {unit}")
+            return
+
+    docker = shutil.which("docker")
+    if docker is not None:
+        probe = subprocess.run(
+            [docker, "inspect", target],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            text=True,
+        )
+        if probe.returncode == 0:
+            result = subprocess.run([docker, normalized_action, target], check=False, capture_output=True, text=True)
+            if result.returncode != 0:
+                raise RuntimeError(result.stderr.strip() or result.stdout.strip() or f"failed to {normalized_action} {target}")
+            return
+
+    raise RuntimeError(f"unknown service target: {target}")
 
 
 def parse_package_install_request(payload: dict[str, Any]) -> PackageInstallRequest:
@@ -662,6 +814,22 @@ def make_handler() -> type[BaseHTTPRequestHandler]:
                     self._send_json({"error": "pairing code mismatch"}, status=HTTPStatus.FORBIDDEN)
                     return
                 self._send_json(profile_payload())
+                return
+            if self.path in {SERVICE_START_PATH, SERVICE_STOP_PATH}:
+                if _require_paired_controller(self.headers) is None:
+                    self._send_json({"error": "not paired"}, status=HTTPStatus.FORBIDDEN)
+                    return
+                content_length = int(self.headers.get("Content-Length", "0"))
+                body = self.rfile.read(content_length).decode("utf-8") if content_length else "{}"
+                try:
+                    request = parse_service_action_request(json.loads(body) if body else {})
+                    action = "start" if self.path == SERVICE_START_PATH else "stop"
+                    control_service(request.service, action)
+                    self._send_json(profile_payload())
+                except (json.JSONDecodeError, ValueError) as exc:
+                    self._send_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+                except Exception as exc:
+                    self._send_json({"error": str(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
                 return
             if self.path not in {PACKAGE_INSTALL_PATH, PACKAGE_UPGRADE_PATH}:
                 self.send_error(HTTPStatus.NOT_FOUND, "not found")

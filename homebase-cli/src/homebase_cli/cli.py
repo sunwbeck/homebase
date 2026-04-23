@@ -21,7 +21,9 @@ from homebase_cli.client import (
     ConnectRuntime,
     CONNECT_LOG_PATH,
     DEFAULT_CLIENT_PORT,
+    control_service,
     detect_exposed_endpoints,
+    detect_service_records,
     describe_port,
     detect_primary_address,
     detect_running_services,
@@ -73,9 +75,11 @@ from homebase_cli.resources import all_resources, child_resources, find_resource
 from homebase_cli.scanner import (
     detect_scannable_networks,
     fetch_package_status,
+    fetch_profile,
     load_discovered_nodes,
     request_package_install,
     request_package_upgrade,
+    request_service_action,
     pair_with_client,
     save_discovered_nodes,
     scan_for_clients,
@@ -195,6 +199,67 @@ def _format_endpoint_details(endpoints: Sequence[tuple[int, str, str | None]]) -
     )
 
 
+def _normalize_service_key(value: str) -> str:
+    """Return a comparable service key."""
+    normalized = value.strip().lower()
+    if normalized.endswith(".service"):
+        normalized = normalized.removesuffix(".service")
+    if "@" in normalized:
+        normalized = normalized.split("@", 1)[0]
+    return normalized
+
+
+def _service_rows(snapshot: dict[str, object]) -> list[dict[str, object]]:
+    """Return normalized service rows for one node snapshot."""
+    endpoints = tuple(snapshot["endpoints"])
+    endpoint_map: dict[str, list[tuple[int, str, str | None]]] = {}
+    for endpoint in endpoints:
+        port, purpose, owner = endpoint
+        for candidate in filter(None, {_normalize_service_key(purpose), _normalize_service_key(owner or "")}):
+            endpoint_map.setdefault(candidate, []).append(endpoint)
+
+    rows: list[dict[str, object]] = []
+    matched_endpoints: set[tuple[int, str, str | None]] = set()
+    for name, state, pid, kind, description in tuple(snapshot["service_records"]):
+        key = _normalize_service_key(name)
+        matched = tuple(endpoint_map.get(key, ()))
+        matched_endpoints.update(matched)
+        rows.append(
+            {
+                "name": name,
+                "state": state,
+                "pid": pid,
+                "kind": kind,
+                "description": description,
+                "endpoints": matched,
+            }
+        )
+
+    for endpoint in endpoints:
+        if endpoint in matched_endpoints:
+            continue
+        port, purpose, owner = endpoint
+        rows.append(
+            {
+                "name": purpose,
+                "state": "running",
+                "pid": None,
+                "kind": "endpoint",
+                "description": owner or "",
+                "endpoints": (endpoint,),
+            }
+        )
+    return rows
+
+
+def _service_row_visible_in_list(row: dict[str, object]) -> bool:
+    """Return whether one service row belongs in the default list view."""
+    endpoints = tuple(row.get("endpoints") or ())
+    if endpoints:
+        return True
+    return False
+
+
 def _node_runtime_snapshot(node):
     """Return one normalized runtime snapshot for a node."""
     local_name = _current_node_name()
@@ -205,17 +270,26 @@ def _node_runtime_snapshot(node):
             profile = local_profile()
         except Exception:
             profile = None
+    if not is_local and node.address and node.client_port:
+        try:
+            profile = fetch_profile(node.address, port=node.client_port)
+        except Exception:
+            profile = None
     endpoints = detect_exposed_endpoints() if profile is not None else (
         node.exposed_endpoints or tuple((port, describe_port(port), None) for port in node.open_ports)
     )
     services = tuple(profile.services) if profile is not None else node.services
-    all_services = tuple(detect_running_services()) if profile is not None else services
+    all_services = tuple(detect_running_services()) if is_local else services
+    service_records = tuple(profile.service_records) if profile is not None else (
+        node.service_records or tuple((service, "running", None, "service", "") for service in services)
+    )
     return {
         "address": node.address or (detect_primary_address() if is_local else None) or "",
         "hostname": node.runtime_hostname or (profile.hostname if profile is not None else "") or "",
         "platform": node.platform or (profile.platform if profile is not None else "") or "",
         "services": services,
         "all_services": all_services,
+        "service_records": service_records,
         "endpoints": endpoints,
         "is_local": is_local,
     }
@@ -724,6 +798,7 @@ def node_add_command(
             open_ports=profile.open_ports,
             services=profile.services,
             exposed_endpoints=profile.exposed_endpoints,
+            service_records=profile.service_records,
         )
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
@@ -849,8 +924,9 @@ def node_list_command(resource: str | None = typer.Argument(None, help="Optional
     table.add_column("Description", overflow="ellipsis")
     current_name = _current_node_name()
     for item in resources:
-        address_value = item.address
-        hostname_value = item.runtime_hostname or ""
+        snapshot = _node_runtime_snapshot(item)
+        address_value = str(snapshot["address"] or "")
+        hostname_value = str(snapshot["hostname"] or "")
         if current_name and item.name == current_name:
             address_value = address_value or detect_primary_address() or ""
             hostname_value = hostname_value or socket.gethostname().strip() or ""
@@ -1135,7 +1211,11 @@ def service_list_command(
     resource: str | None = typer.Argument(None, help="Optional node name."),
     group: str | None = typer.Option(None, "--group", help="Optional group name."),
 ) -> None:
-    """List exposed endpoints as service rows across nodes, one node, or one group."""
+    """List the currently relevant services across nodes.
+
+    This default view focuses on services that are currently running or exposed.
+    Use `homebase service show <node>` for the full service record list on one node.
+    """
     current_role = _current_runtime_role()
     if current_role == "managed":
         if resource is not None or group is not None:
@@ -1147,15 +1227,28 @@ def service_list_command(
         table.add_column("Address")
         table.add_column("Hostname")
         table.add_column("Service")
-        table.add_column("Port")
-        table.add_column("Owner")
+        table.add_column("Kind")
+        table.add_column("State")
+        table.add_column("PID")
+        table.add_column("Exposure")
+        table.add_column("Description", overflow="fold")
         snapshot = _node_runtime_snapshot(local_node)
-        endpoints = snapshot["endpoints"]
-        if not endpoints:
-            table.add_row(_node_label(local_node.name), snapshot["address"], snapshot["hostname"], "none", "", "")
+        rows = [row for row in _service_rows(snapshot) if _service_row_visible_in_list(row)]
+        if not rows:
+            table.add_row(_node_label(local_node.name), snapshot["address"], snapshot["hostname"], "none", "", "", "", "", "")
         else:
-            for port, purpose, owner in endpoints:
-                table.add_row(_node_label(local_node.name), snapshot["address"], snapshot["hostname"], purpose, str(port), owner or "")
+            for row in rows:
+                table.add_row(
+                    _node_label(local_node.name),
+                    snapshot["address"],
+                    snapshot["hostname"],
+                    str(row["name"]),
+                    str(row["kind"]),
+                    str(row["state"]),
+                    str(row["pid"] or ""),
+                    _format_exposure_summary(tuple(row["endpoints"])),
+                    str(row["description"] or ""),
+                )
         console.print(table)
         return
 
@@ -1175,24 +1268,30 @@ def service_list_command(
     table.add_column("Address")
     table.add_column("Hostname")
     table.add_column("Service")
-    table.add_column("Port")
-    table.add_column("Owner")
+    table.add_column("Kind")
+    table.add_column("State")
+    table.add_column("PID")
+    table.add_column("Exposure")
+    table.add_column("Description", overflow="fold")
     table.add_column("Groups")
     for node in nodes:
         snapshot = _node_runtime_snapshot(node)
-        endpoints = snapshot["endpoints"]
+        rows = [row for row in _service_rows(snapshot) if _service_row_visible_in_list(row)]
         groups_value = ", ".join(node.role_groups) if node.role_groups else ""
-        if not endpoints:
-            table.add_row(_node_label(node.name), snapshot["address"], snapshot["hostname"], "none", "", "", groups_value)
+        if not rows:
+            table.add_row(_node_label(node.name), snapshot["address"], snapshot["hostname"], "none", "", "", "", "", "", groups_value)
             continue
-        for port, purpose, owner in endpoints:
+        for row in rows:
             table.add_row(
                 _node_label(node.name),
                 snapshot["address"],
                 snapshot["hostname"],
-                purpose,
-                str(port),
-                owner or "",
+                str(row["name"]),
+                str(row["kind"]),
+                str(row["state"]),
+                str(row["pid"] or ""),
+                _format_exposure_summary(tuple(row["endpoints"])),
+                str(row["description"] or ""),
                 groups_value,
             )
     console.print(table)
@@ -1202,7 +1301,7 @@ def service_list_command(
 def service_show_command(
     resource: str | None = typer.Argument(None, help="Optional node name."),
 ) -> None:
-    """Show exposed and running services for one node in detail."""
+    """Show service records and exposed endpoints for one node in detail."""
     current_role = _current_runtime_role()
     selected_name = resource
     if current_role == "managed":
@@ -1224,10 +1323,139 @@ def service_show_command(
     table.add_row("hostname", snapshot["hostname"])
     table.add_row("address", snapshot["address"])
     table.add_row("groups", ", ".join(node.role_groups) if node.role_groups else "")
-    table.add_row("exposed services", ", ".join(snapshot["services"]))
-    table.add_row("all services", ", ".join(snapshot["all_services"]))
     table.add_row("exposure", _format_endpoint_details(snapshot["endpoints"]))
     console.print(table)
+    records = _service_rows(snapshot)
+    detail = Table(show_header=True, header_style="bold")
+    detail.add_column("Service")
+    detail.add_column("Kind")
+    detail.add_column("State")
+    detail.add_column("PID")
+    detail.add_column("Exposure")
+    detail.add_column("Description")
+    if not records:
+        detail.add_row("none", "", "", "", "", "")
+    else:
+        for row in records:
+            detail.add_row(
+                str(row["name"]),
+                str(row["kind"]),
+                str(row["state"]),
+                str(row["pid"] or ""),
+                _format_exposure_summary(tuple(row["endpoints"])),
+                str(row["description"] or ""),
+            )
+    console.print("")
+    console.print("[bold]Service records[/bold]")
+    console.print(detail)
+
+
+@service_app.command("search")
+def service_search_command(
+    query: str = typer.Argument(..., help="Service name fragment or port number."),
+) -> None:
+    """Search services or exposed ports across nodes."""
+    current_role = _current_runtime_role()
+    nodes = [_current_node_name() or socket.gethostname()] if current_role == "managed" else []
+    table = Table(show_header=True, header_style="bold")
+    table.add_column("Node")
+    table.add_column("Address")
+    table.add_column("Service")
+    table.add_column("State")
+    table.add_column("PID")
+    table.add_column("Exposure")
+    query_text = query.strip().lower()
+    query_port = int(query_text) if query_text.isdigit() else None
+    candidates = []
+    if current_role == "managed":
+        local_name = _current_node_name() or socket.gethostname()
+        local_node = find_node(local_name) or ensure_local_node(local_name, current_role or "managed", runtime_hostname=socket.gethostname())
+        candidates = [local_node]
+    else:
+        _require_role("controller")
+        candidates = list(_inventory_nodes())
+    rows = 0
+    for node in candidates:
+        snapshot = _node_runtime_snapshot(node)
+        for row in _service_rows(snapshot):
+            exposure_text = _format_exposure_summary(tuple(row["endpoints"]))
+            matched = query_text in str(row["name"]).lower() or query_text in str(row["description"]).lower()
+            if query_port is not None and any(port == query_port for port, _, _ in tuple(row["endpoints"])):
+                matched = True
+            if not matched:
+                continue
+            table.add_row(
+                _node_label(node.name),
+                snapshot["address"],
+                str(row["name"]),
+                str(row["state"]),
+                str(row["pid"] or ""),
+                exposure_text,
+            )
+            rows += 1
+    if rows == 0:
+        console.print("[yellow]No matching services.[/yellow]")
+        return
+    console.print(table)
+
+
+def _apply_service_action(node, service: str, action: str) -> None:
+    """Apply one service start/stop action locally or remotely."""
+    local_name = _current_node_name()
+    if local_name and node.name == local_name:
+        try:
+            control_service(service, action)
+        except Exception as exc:
+            raise typer.BadParameter(str(exc)) from exc
+        return
+    if not node.address:
+        raise typer.BadParameter(f"node has no address: {node.name}")
+    port = node.client_port or DEFAULT_CLIENT_PORT
+    payload = request_service_action(node.address, service=service, action=action, port=port)
+    if payload is None:
+        raise typer.BadParameter(f"service {action} failed on {node.name}")
+
+
+@service_app.command("start")
+def service_start_command(
+    resource: str | None = typer.Argument(None, help="Optional node name."),
+    service: str | None = typer.Argument(None, help="Service or container name."),
+) -> None:
+    """Start one service on one node."""
+    current_role = _current_runtime_role()
+    if current_role == "managed":
+        selected_name = _current_node_name() or socket.gethostname()
+        selected_service = service or resource or typer.prompt("Service name").strip()
+    else:
+        _require_role("controller")
+        selected_name = resource or _choose_registered_node()
+        selected_service = service or typer.prompt("Service name").strip()
+    node = find_node(selected_name)
+    if node is None:
+        raise typer.BadParameter(f"unknown node: {selected_name}")
+    _apply_service_action(node, selected_service, "start")
+    console.print(f"[green]Started service:[/green] {selected_service} on {node.name}")
+
+
+@service_app.command("stop")
+def service_stop_command(
+    resource: str | None = typer.Argument(None, help="Optional node name."),
+    service: str | None = typer.Argument(None, help="Service or container name."),
+) -> None:
+    """Stop one service on one node."""
+    current_role = _current_runtime_role()
+    if current_role == "managed":
+        selected_name = _current_node_name() or socket.gethostname()
+        selected_service = service or resource or typer.prompt("Service name").strip()
+    else:
+        _require_role("controller")
+        selected_name = resource or _choose_registered_node()
+        selected_service = service or typer.prompt("Service name").strip()
+    node = find_node(selected_name)
+    if node is None:
+        raise typer.BadParameter(f"unknown node: {selected_name}")
+    _apply_service_action(node, selected_service, "stop")
+    console.print(f"[green]Stopped service:[/green] {selected_service} on {node.name}")
 
 
 def _run_init(role: str | None = None, name: str | None = None, description: str | None = None) -> None:

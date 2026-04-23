@@ -387,19 +387,77 @@ def test_service_list_shows_local_services(monkeypatch) -> None:
                 open_ports=(22, 8428),
                 services=("ssh", "docker"),
                 exposed_endpoints=((22, "ssh", "sshd"), (8428, "homebase", "python")),
+                service_records=(("ssh", "running", 111, "systemd", "OpenSSH server"), ("docker", "running", None, "docker", "Docker Engine")),
             ),
         )
-        monkeypatch.setattr("homebase_cli.cli.local_profile", lambda: ClientProfile(node_id="node-1", hostname="app", platform="Linux 6.1", version="0.1.8", services=("ssh", "docker")))
+        monkeypatch.setattr(
+            "homebase_cli.cli.local_profile",
+            lambda: ClientProfile(
+                node_id="node-1",
+                hostname="app",
+                platform="Linux 6.1",
+                version="0.1.8",
+                services=("ssh", "docker"),
+                service_records=(("ssh", "running", 111, "systemd", "OpenSSH server"), ("docker", "running", None, "docker", "Docker Engine")),
+            ),
+        )
         monkeypatch.setattr("homebase_cli.cli.detect_exposed_endpoints", lambda: ((22, "ssh", "sshd"), (8428, "homebase", "python")))
         result = runner.invoke(app, ["service", "list"], env=env)
         assert result.exit_code == 0
         assert "Service" in result.stdout
-        assert "Port" in result.stdout
-        assert "Owner" in result.stdout
+        assert "Kind" in result.stdout
+        assert "State" in result.stdout
+        assert "PID" in result.stdout
+        assert "Exposure" in result.stdout
         assert "192.168.0.20" in result.stdout
         assert "ssh" in result.stdout
-        assert "8428" in result.stdout
-        assert "python" in result.stdout
+        assert "running" in result.stdout
+        assert "111" in result.stdout
+        assert "homebase:8428" in result.stdout
+        assert "OpenSSH server" in result.stdout
+
+
+def test_service_list_hides_non_running_records_by_default(monkeypatch) -> None:
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        env = {"HOMEBASE_SETTINGS_PATH": "settings.toml", "COLUMNS": "240"}
+        Path("settings.toml").write_text('role = "managed"\nnode_name = "app"\n', encoding="utf-8")
+        app = load_app(monkeypatch, "settings.toml")
+        monkeypatch.setattr(
+            "homebase_cli.cli.find_node",
+            lambda name: SimpleNamespace(
+                name="app",
+                address="192.168.0.20",
+                runtime_hostname="app",
+                platform="Linux 6.1",
+                open_ports=(22,),
+                services=("ssh",),
+                exposed_endpoints=((22, "ssh", "sshd"),),
+                service_records=(
+                    ("ssh", "running", 111, "systemd", "OpenSSH server"),
+                    ("apt-daily", "dead", None, "systemd", "Daily apt download"),
+                ),
+            ),
+        )
+        monkeypatch.setattr(
+            "homebase_cli.cli.local_profile",
+            lambda: ClientProfile(
+                node_id="node-1",
+                hostname="app",
+                platform="Linux 6.1",
+                version="0.1.8",
+                services=("ssh",),
+                service_records=(
+                    ("ssh", "running", 111, "systemd", "OpenSSH server"),
+                    ("apt-daily", "dead", None, "systemd", "Daily apt download"),
+                ),
+            ),
+        )
+        monkeypatch.setattr("homebase_cli.cli.detect_exposed_endpoints", lambda: ((22, "ssh", "sshd"),))
+        result = runner.invoke(app, ["service", "list"], env=env)
+        assert result.exit_code == 0
+        assert "ssh" in result.stdout
+        assert "apt-daily" not in result.stdout
 
 
 def test_service_list_marks_nodes_without_endpoints(monkeypatch) -> None:
@@ -446,6 +504,7 @@ def test_service_show_uses_runtime_address(monkeypatch) -> None:
                 platform="Linux 6.1",
                 version="0.1.15",
                 services=("ssh", "homebase"),
+                service_records=(("ssh", "running", 999, "systemd", "OpenSSH server"),),
             ),
         )
         monkeypatch.setattr("homebase_cli.cli.detect_running_services", lambda: ("ssh", "homebase", "caddy"))
@@ -455,6 +514,77 @@ def test_service_show_uses_runtime_address(monkeypatch) -> None:
         assert "address" in result.stdout
         assert "192.168.0.10" in result.stdout
         assert "22 -> ssh (sshd)" in result.stdout
+        assert "Service records" in result.stdout
+        assert "running" in result.stdout
+        assert "999" in result.stdout
+
+
+def test_service_search_matches_name_and_port(monkeypatch) -> None:
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        env = {"HOMEBASE_SETTINGS_PATH": "settings.toml", "HOMEBASE_REGISTRY_PATH": "nodes.toml", "COLUMNS": "240"}
+        Path("settings.toml").write_text('role = "controller"\nnode_name = "control"\n', encoding="utf-8")
+        Path("nodes.toml").write_text(
+            '\n'.join(
+                [
+                    '[[nodes]]',
+                    'name = "app"',
+                    'kind = "vm"',
+                    'runtime_role = "managed"',
+                    'address = "192.168.0.20"',
+                    'runtime_hostname = "app"',
+                    'services = ["grafana"]',
+                    'exposed_endpoints = ["3000|grafana|docker"]',
+                    'service_records = ["grafana|running||docker|Grafana container"]',
+                    '',
+                ]
+            ),
+            encoding="utf-8",
+        )
+        app = load_app(monkeypatch, "settings.toml")
+        result = runner.invoke(app, ["service", "search", "graf"], env=env)
+        assert result.exit_code == 0
+        assert "grafana" in result.stdout
+        result = runner.invoke(app, ["service", "search", "3000"], env=env)
+        assert result.exit_code == 0
+        assert "3000" in result.stdout
+
+
+def test_service_start_requests_remote_action(monkeypatch) -> None:
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        env = {"HOMEBASE_SETTINGS_PATH": "settings.toml", "HOMEBASE_REGISTRY_PATH": "nodes.toml"}
+        Path("settings.toml").write_text('role = "controller"\nnode_name = "control"\n', encoding="utf-8")
+        Path("nodes.toml").write_text(
+            '[[nodes]]\nname = "app"\nkind = "vm"\nruntime_role = "managed"\naddress = "192.168.0.20"\nclient_port = 8428\n',
+            encoding="utf-8",
+        )
+        app = load_app(monkeypatch, "settings.toml")
+        called = {}
+        monkeypatch.setattr(
+            "homebase_cli.cli.request_service_action",
+            lambda address, service, action, port=8428: called.update({"address": address, "service": service, "action": action, "port": port}) or {},
+        )
+        result = runner.invoke(app, ["service", "start", "app", "grafana"], env=env)
+        assert result.exit_code == 0
+        assert called == {"address": "192.168.0.20", "service": "grafana", "action": "start", "port": 8428}
+
+
+def test_service_stop_uses_local_control(monkeypatch) -> None:
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        env = {"HOMEBASE_SETTINGS_PATH": "settings.toml", "HOMEBASE_REGISTRY_PATH": "nodes.toml"}
+        Path("settings.toml").write_text('role = "managed"\nnode_name = "app"\n', encoding="utf-8")
+        Path("nodes.toml").write_text('[[nodes]]\nname = "app"\nkind = "node"\nruntime_role = "managed"\n', encoding="utf-8")
+        app = load_app(monkeypatch, "settings.toml")
+        called = {}
+        monkeypatch.setattr(
+            "homebase_cli.cli.control_service",
+            lambda service, action: called.update({"service": service, "action": action}),
+        )
+        result = runner.invoke(app, ["service", "stop", "grafana"], env=env)
+        assert result.exit_code == 0
+        assert called == {"service": "grafana", "action": "stop"}
 
 
 def test_node_edit_name_updates_local_node_name(monkeypatch) -> None:

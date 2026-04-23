@@ -32,6 +32,7 @@ class Node:
     open_ports: tuple[int, ...] = ()
     services: tuple[str, ...] = ()
     exposed_endpoints: tuple[tuple[int, str, str | None], ...] = ()
+    service_records: tuple[tuple[str, str, int | None, str, str], ...] = ()
     role_groups: tuple[str, ...] = ()
 
     @property
@@ -85,6 +86,7 @@ def load_nodes(path: Path | None = None) -> tuple[Node, ...]:
     for item in raw_nodes:
         values = dict(item)
         exposed_entries: list[tuple[int, str, str | None]] = []
+        service_entries: list[tuple[str, str, int | None, str, str]] = []
         for raw_entry in values.get("exposed_endpoints", []):
             entry = str(raw_entry).strip()
             if not entry:
@@ -98,6 +100,27 @@ def load_nodes(path: Path | None = None) -> tuple[Node, ...]:
             purpose_value = purpose_text.strip() or str(port_value)
             owner_value = owner_text.strip() or None
             exposed_entries.append((port_value, purpose_value, owner_value))
+        for raw_entry in values.get("service_records", []):
+            entry = str(raw_entry).strip()
+            if not entry:
+                continue
+            name_text, _, remainder = entry.partition("|")
+            state_text, _, remainder = remainder.partition("|")
+            pid_text, _, remainder = remainder.partition("|")
+            kind_text, _, description_text = remainder.partition("|")
+            name_value = name_text.strip()
+            if not name_value:
+                continue
+            pid_value = int(pid_text.strip()) if pid_text.strip().isdigit() else None
+            service_entries.append(
+                (
+                    name_value,
+                    state_text.strip() or "unknown",
+                    pid_value,
+                    kind_text.strip() or "service",
+                    description_text.strip(),
+                )
+            )
         nodes.append(
             Node(
                 name=str(values["name"]),
@@ -117,6 +140,7 @@ def load_nodes(path: Path | None = None) -> tuple[Node, ...]:
                 open_ports=tuple(int(port) for port in values.get("open_ports", [])),
                 services=tuple(str(service) for service in values.get("services", [])),
                 exposed_endpoints=tuple(sorted(exposed_entries, key=lambda item: item[0])),
+                service_records=tuple(sorted(service_entries, key=lambda item: (item[3], item[0]))),
                 role_groups=tuple(str(name) for name in values.get("role_groups", [])),
             )
         )
@@ -184,6 +208,12 @@ def _save_registry(nodes: tuple[Node, ...], role_groups: tuple[RoleGroup, ...], 
                 f'"{port}|{purpose}|{owner or ""}"' for port, purpose, owner in node.exposed_endpoints
             )
             lines.append(f"exposed_endpoints = [{endpoint_values}]")
+        if node.service_records:
+            service_values = ", ".join(
+                f'"{name}|{state}|{pid or ""}|{kind}|{description}"'
+                for name, state, pid, kind, description in node.service_records
+            )
+            lines.append(f"service_records = [{service_values}]")
         if node.role_groups:
             group_values = ", ".join(f'"{group}"' for group in node.role_groups)
             lines.append(f"role_groups = [{group_values}]")
@@ -243,6 +273,7 @@ def add_node(
     open_ports: tuple[int, ...] = (),
     services: tuple[str, ...] = (),
     exposed_endpoints: tuple[tuple[int, str, str | None], ...] = (),
+    service_records: tuple[tuple[str, str, int | None, str, str], ...] = (),
     path: Path | None = None,
 ) -> Node:
     """Add one node to the persistent registry."""
@@ -271,6 +302,7 @@ def add_node(
         open_ports=tuple(sorted(open_ports)),
         services=tuple(services),
         exposed_endpoints=tuple(sorted(exposed_endpoints, key=lambda item: item[0])),
+        service_records=tuple(sorted(service_records, key=lambda item: (item[3], item[0]))),
         role_groups=(),
     )
     save_nodes(existing_nodes + (node,), path=path)
@@ -308,6 +340,7 @@ def rename_node(name: str, new_name: str, path: Path | None = None) -> Node:
                 open_ports=node.open_ports,
                 services=node.services,
                 exposed_endpoints=node.exposed_endpoints,
+                service_records=node.service_records,
                 role_groups=node.role_groups,
             )
             updated_nodes.append(renamed)
@@ -328,6 +361,7 @@ def rename_node(name: str, new_name: str, path: Path | None = None) -> Node:
                 open_ports=node.open_ports,
                 services=node.services,
                 exposed_endpoints=node.exposed_endpoints,
+                service_records=node.service_records,
                 role_groups=node.role_groups,
             )
         )
@@ -363,6 +397,7 @@ def remove_node(name: str, path: Path | None = None) -> Node:
                 open_ports=node.open_ports,
                 services=node.services,
                 exposed_endpoints=node.exposed_endpoints,
+                service_records=node.service_records,
                 role_groups=node.role_groups,
             )
         )
@@ -399,6 +434,7 @@ def set_node_runtime_role(name: str, runtime_role: str, path: Path | None = None
             open_ports=node.open_ports,
             services=node.services,
             exposed_endpoints=node.exposed_endpoints,
+            service_records=node.service_records,
             role_groups=node.role_groups,
         )
         updated_nodes.append(updated)
@@ -435,6 +471,7 @@ def set_node_description(name: str, description: str, path: Path | None = None) 
             open_ports=node.open_ports,
             services=node.services,
             exposed_endpoints=node.exposed_endpoints,
+            service_records=node.service_records,
             role_groups=node.role_groups,
         )
         updated_nodes.append(updated)
@@ -455,6 +492,7 @@ def ensure_local_node(
     open_ports: tuple[int, ...] = (),
     services: tuple[str, ...] = (),
     exposed_endpoints: tuple[tuple[int, str, str | None], ...] = (),
+    service_records: tuple[tuple[str, str, int | None, str, str], ...] = (),
     previous_name: str | None = None,
     path: Path | None = None,
 ) -> Node:
@@ -483,6 +521,7 @@ def ensure_local_node(
             open_ports=open_ports,
             services=services,
             exposed_endpoints=exposed_endpoints,
+            service_records=service_records,
             path=path,
         )
     updated_nodes: list[Node] = []
@@ -506,6 +545,7 @@ def ensure_local_node(
             open_ports=tuple(sorted(open_ports)) if open_ports else node.open_ports,
             services=tuple(services) if services else node.services,
             exposed_endpoints=tuple(sorted(exposed_endpoints, key=lambda item: item[0])) if exposed_endpoints else node.exposed_endpoints,
+            service_records=tuple(sorted(service_records, key=lambda item: (item[3], item[0]))) if service_records else node.service_records,
             role_groups=node.role_groups,
         )
         updated_nodes.append(updated)
@@ -561,6 +601,7 @@ def remove_role_group(name: str, path: Path | None = None) -> None:
             open_ports=node.open_ports,
             services=node.services,
             exposed_endpoints=node.exposed_endpoints,
+            service_records=node.service_records,
             role_groups=tuple(item for item in node.role_groups if item != normalized_name),
         )
         for node in load_nodes(path)
@@ -605,6 +646,7 @@ def rename_role_group(name: str, new_name: str, path: Path | None = None) -> Rol
             open_ports=node.open_ports,
             services=node.services,
             exposed_endpoints=node.exposed_endpoints,
+            service_records=node.service_records,
             role_groups=tuple(normalized_new_name if item == normalized_name else item for item in node.role_groups),
         )
         for node in load_nodes(path)
@@ -707,6 +749,7 @@ def assign_node_role_group(node_name: str, group_name: str, path: Path | None = 
         open_ports=node.open_ports,
         services=node.services,
         exposed_endpoints=node.exposed_endpoints,
+        service_records=node.service_records,
         role_groups=node.role_groups + (group_name,),
     )
     nodes = tuple(updated if item.name == node_name else item for item in load_nodes(path))
@@ -734,6 +777,7 @@ def unassign_node_role_group(node_name: str, group_name: str, path: Path | None 
         open_ports=node.open_ports,
         services=node.services,
         exposed_endpoints=node.exposed_endpoints,
+        service_records=node.service_records,
         role_groups=tuple(item for item in node.role_groups if item != group_name),
     )
     nodes = tuple(updated if item.name == node_name else item for item in load_nodes(path))

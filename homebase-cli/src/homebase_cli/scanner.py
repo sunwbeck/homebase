@@ -19,6 +19,8 @@ from homebase_cli.client import (
     PACKAGE_UPGRADE_PATH,
     PAIR_PATH,
     PROFILE_PATH,
+    SERVICE_START_PATH,
+    SERVICE_STOP_PATH,
     ClientDiscovery,
     ClientProfile,
     PairRequest,
@@ -334,6 +336,43 @@ def request_package_upgrade(
             "X-Homebase-Controller": controller_id or local_controller_id(),
         },
         body=json.dumps({"repo_url": repo_url, "include_prerelease": include_prerelease}),
+    )
+    if result is None:
+        return None
+    status, body = result
+    if status != 200:
+        return None
+    try:
+        return json.loads(body)
+    except json.JSONDecodeError:
+        return None
+
+
+def request_service_action(
+    address: str,
+    *,
+    service: str,
+    action: str,
+    port: int = DEFAULT_CLIENT_PORT,
+    timeout: float = 60.0,
+    controller_id: str | None = None,
+) -> dict[str, object] | None:
+    """Ask one paired client to start or stop a named service."""
+    normalized_action = action.strip().lower()
+    if normalized_action not in {"start", "stop"}:
+        raise ValueError(f"unsupported service action: {action}")
+    path = SERVICE_START_PATH if normalized_action == "start" else SERVICE_STOP_PATH
+    result = _http_request(
+        "POST",
+        address,
+        path,
+        port=port,
+        timeout=timeout,
+        headers={
+            "Content-Type": "application/json",
+            "X-Homebase-Controller": controller_id or local_controller_id(),
+        },
+        body=json.dumps({"service": service}),
     )
     if result is None:
         return None
