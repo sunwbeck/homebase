@@ -1,5 +1,6 @@
 from pathlib import Path
 from urllib.error import HTTPError
+from types import SimpleNamespace
 
 from homebase_cli.packaging import (
     DEFAULT_REPO_URL,
@@ -11,6 +12,7 @@ from homebase_cli.packaging import (
     install_command,
     load_install_state,
     save_install_state,
+    installed_version,
 )
 
 
@@ -136,3 +138,17 @@ def test_fetch_json_404_without_token_has_private_repo_message(monkeypatch) -> N
         assert "gh auth login" in str(exc)
     else:
         raise AssertionError("expected RuntimeError")
+
+
+def test_installed_version_falls_back_to_pip_show_for_python_bin(monkeypatch) -> None:
+    calls = []
+
+    def fake_run(args, check=False, capture_output=True, text=True):
+        calls.append(args)
+        if "-c" in args:
+            return SimpleNamespace(returncode=1, stdout="", stderr="")
+        return SimpleNamespace(returncode=0, stdout="Name: homebase-cli\nVersion: 0.1.2\n", stderr="")
+
+    monkeypatch.setattr("homebase_cli.packaging.subprocess.run", fake_run)
+    assert installed_version("/tmp/fake-python") == "0.1.2"
+    assert calls[1] == ["/tmp/fake-python", "-m", "pip", "show", "homebase-cli"]

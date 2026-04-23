@@ -311,7 +311,7 @@ def installed_version(python_bin: str | None = None) -> str | None:
         try:
             return importlib.metadata.version(PACKAGE_NAME)
         except importlib.metadata.PackageNotFoundError:
-            return None
+            return _installed_version_via_pip_show(sys.executable)
     result = subprocess.run(
         [
             python_bin,
@@ -328,8 +328,25 @@ def installed_version(python_bin: str | None = None) -> str | None:
         text=True,
     )
     if result.returncode != 0:
+        return _installed_version_via_pip_show(python_bin)
+    return result.stdout.strip() or _installed_version_via_pip_show(python_bin)
+
+
+def _installed_version_via_pip_show(python_bin: str) -> str | None:
+    """Return the installed version by parsing `pip show` output."""
+    result = subprocess.run(
+        [python_bin, "-m", "pip", "show", PACKAGE_NAME],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
         return None
-    return result.stdout.strip() or None
+    for line in result.stdout.splitlines():
+        if line.startswith("Version:"):
+            value = line.split(":", 1)[1].strip()
+            return value or None
+    return None
 
 
 def load_install_state(path: Path = INSTALL_STATE_PATH) -> InstalledPackageStatus:
