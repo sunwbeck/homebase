@@ -371,7 +371,12 @@ def _match_registered_nodes(scan_address: str, scan_node_id: str | None) -> str:
 
 
 def _format_discovered_label(item: DiscoveredNode) -> str:
-    return f"{item.address} | {item.discovery.hostname} | {item.discovery.platform}"
+    details = [item.discovery.node_name, item.address]
+    if item.discovery.hostname and item.discovery.hostname != item.discovery.node_name:
+        details.append(item.discovery.hostname)
+    if item.discovery.description:
+        details.append(item.discovery.description)
+    return " | ".join(details)
 
 
 def _pick_from_list(label: str, options: Sequence[str]) -> str:
@@ -769,7 +774,7 @@ def node_scan_command(
         return
 
     discovered = []
-    rows: list[tuple[str, str, str, str, str, str]] = []
+    rows: list[tuple[str, str, str, str, str, str, str]] = []
     for network in networks:
         results = scan_for_clients(network, port=port, timeout=timeout)
         discovered.extend(results)
@@ -778,8 +783,9 @@ def node_scan_command(
                 (
                     item.address,
                     _match_registered_nodes(item.address, item.discovery.node_id),
+                    item.discovery.node_name,
                     item.discovery.hostname,
-                    item.discovery.node_id,
+                    item.discovery.description,
                     item.discovery.platform,
                     item.discovery.version,
                 )
@@ -811,7 +817,7 @@ def node_add_command(
     _require_role("controller")
     selected = _choose_discovered_node()
     profile = _resolve_profile_for_node(selected, client_port)
-    resolved_name = name or typer.prompt("Node name", default=selected.discovery.hostname)
+    resolved_name = name or typer.prompt("Node name", default=selected.discovery.node_name or selected.discovery.hostname)
     resolved_parent = parent if parent is not None else _choose_parent()
     resolved_kind = kind if kind is not None else _choose_kind()
     resolved_ssh_user = ssh_user if ssh_user is not None else typer.prompt("SSH user", default="", show_default=False).strip() or None

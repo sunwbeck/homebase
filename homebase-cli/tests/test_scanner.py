@@ -40,7 +40,7 @@ def test_scan_for_clients_returns_only_responding_nodes(monkeypatch) -> None:
 
     def fake_fetch_discovery(address: str, port: int, timeout: float):
         if address == "192.168.1.10":
-            return ClientDiscovery(node_id="abc123", hostname="app", platform="Linux 6.1", version="0.1.0")
+            return ClientDiscovery(node_id="abc123", node_name="app", hostname="app", platform="Linux 6.1", version="0.1.0")
         return None
 
     monkeypatch.setattr("homebase_cli.scanner.fetch_discovery", fake_fetch_discovery)
@@ -56,7 +56,7 @@ def test_save_and_load_discovered_nodes_round_trip(tmp_path: Path) -> None:
         DiscoveredNode(
             address="192.168.1.10",
             port=8428,
-            discovery=ClientDiscovery(node_id="abc123", hostname="app", platform="Linux 6.1", version="0.1.0"),
+            discovery=ClientDiscovery(node_id="abc123", node_name="app", hostname="app", platform="Linux 6.1", version="0.1.0"),
         ),
     )
     save_discovered_nodes(nodes, path=path)
@@ -73,12 +73,12 @@ def test_unregistered_discovered_nodes_filters_registered_entries(tmp_path: Path
             DiscoveredNode(
                 address="192.168.1.10",
                 port=8428,
-                discovery=ClientDiscovery(node_id="abc123", hostname="app", platform="Linux 6.1", version="0.1.0"),
+                discovery=ClientDiscovery(node_id="abc123", node_name="app", hostname="app", platform="Linux 6.1", version="0.1.0"),
             ),
             DiscoveredNode(
                 address="192.168.1.11",
                 port=8428,
-                discovery=ClientDiscovery(node_id="def456", hostname="db", platform="Linux 6.1", version="0.1.0"),
+                discovery=ClientDiscovery(node_id="def456", node_name="db", hostname="db", platform="Linux 6.1", version="0.1.0"),
             ),
         ),
         path=discovery_path,
@@ -93,6 +93,7 @@ def test_unregistered_discovered_nodes_filters_registered_entries(tmp_path: Path
 def test_pair_with_client_returns_profile(monkeypatch) -> None:
     profile = ClientProfile(
         node_id="abc123",
+        node_name="app",
         hostname="app",
         platform="Linux 6.1",
         version="0.1.0",
@@ -104,7 +105,7 @@ def test_pair_with_client_returns_profile(monkeypatch) -> None:
     )
     monkeypatch.setattr(
         "homebase_cli.scanner._http_request",
-        lambda method, address, path, **kwargs: (200, '{"node_id":"abc123","hostname":"app","platform":"Linux 6.1","version":"0.1.0","open_ports":[22],"services":["ssh"]}'),
+        lambda method, address, path, **kwargs: (200, '{"node_id":"abc123","node_name":"app","hostname":"app","platform":"Linux 6.1","version":"0.1.0","open_ports":[22],"services":["ssh"]}'),
     )
     paired = pair_with_client("192.168.1.10", "12345678")
     assert paired == profile

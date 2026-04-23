@@ -10,6 +10,7 @@ from typer.testing import CliRunner
 
 from homebase_cli import cli as cli_module
 from homebase_cli.client import ClientProfile, ClientState, ConnectRuntime, PairedController
+from homebase_cli.scanner import ClientDiscovery, DiscoveredNode
 from homebase_cli.selftest import SelfTestResult
 
 
@@ -41,6 +42,42 @@ def test_connect_scan_updates_discovery_cache(monkeypatch) -> None:
         assert payload == []
 
 
+def test_connect_scan_shows_discovered_node_name(monkeypatch) -> None:
+    runner = CliRunner()
+    app = load_app(monkeypatch)
+    monkeypatch.setattr("homebase_cli.cli.detect_scannable_networks", lambda: ("192.168.0.0/24",))
+    monkeypatch.setattr(
+        "homebase_cli.cli.scan_for_clients",
+        lambda cidr, port, timeout: (
+            DiscoveredNode(
+                address="192.168.0.20",
+                port=8428,
+                discovery=ClientDiscovery(
+                    node_id="abc123",
+                    node_name="app",
+                    hostname="pve-app",
+                    platform="Linux 6.1",
+                    version="0.1.0",
+                    description="application vm",
+                ),
+            ),
+        ),
+    )
+    with runner.isolated_filesystem():
+        Path("settings.toml").write_text('role = "controller"\nnode_name = "control"\n', encoding="utf-8")
+        result = runner.invoke(
+            app,
+            ["connect", "scan"],
+            env={"HOMEBASE_SETTINGS_PATH": "settings.toml", "HOMEBASE_DISCOVERY_PATH": "discovered.json", "HOMEBASE_REGISTRY_PATH": "nodes.toml", "COLUMNS": "240"},
+        )
+        assert result.exit_code == 0
+        assert "Node" in result.stdout
+        assert "app" in result.stdout
+        assert "pve-app" in result.stdout
+        assert "application vm" in result.stdout
+        assert "Node ID" not in result.stdout
+
+
 def test_connect_add_uses_cached_discovery_and_pairing(monkeypatch) -> None:
     runner = CliRunner()
     app = load_app(monkeypatch)
@@ -50,9 +87,11 @@ def test_connect_add_uses_cached_discovery_and_pairing(monkeypatch) -> None:
             "port": 8428,
             "discovery": {
                 "node_id": "abc123",
+                "node_name": "app",
                 "hostname": "app",
                 "platform": "Linux 6.1",
                 "version": "0.1.0",
+                "description": "application vm",
                 "pairing_required": True,
             },
         }
@@ -61,9 +100,11 @@ def test_connect_add_uses_cached_discovery_and_pairing(monkeypatch) -> None:
         "homebase_cli.cli.pair_with_client",
         lambda address, code, port=8428: ClientProfile(
             node_id="abc123",
+            node_name="app",
             hostname="app",
             platform="Linux 6.1",
             version="0.1.0",
+            description="application vm",
             open_ports=(22, 8080),
             services=("ssh", "docker"),
         ) if code == "12345678" else None,
@@ -90,9 +131,11 @@ def test_connect_add_fails_when_pairing_code_is_wrong(monkeypatch) -> None:
             "port": 8428,
             "discovery": {
                 "node_id": "abc123",
+                "node_name": "app",
                 "hostname": "app",
                 "platform": "Linux 6.1",
                 "version": "0.1.0",
+                "description": "application vm",
                 "pairing_required": True,
             },
         }
@@ -308,6 +351,7 @@ def test_managed_status_shows_self_and_paired_controllers(monkeypatch) -> None:
             "homebase_cli.cli.local_profile",
             lambda: ClientProfile(
                 node_id="node-1",
+                node_name="app",
                 hostname="app",
                 platform="Linux 6.1",
                 version="0.1.8",
@@ -394,6 +438,7 @@ def test_service_list_shows_local_services(monkeypatch) -> None:
             "homebase_cli.cli.local_profile",
             lambda: ClientProfile(
                 node_id="node-1",
+                node_name="app",
                 hostname="app",
                 platform="Linux 6.1",
                 version="0.1.8",
@@ -446,6 +491,7 @@ def test_service_list_shows_non_running_records(monkeypatch) -> None:
             "homebase_cli.cli.local_profile",
             lambda: ClientProfile(
                 node_id="node-1",
+                node_name="app",
                 hostname="app",
                 platform="Linux 6.1",
                 version="0.1.8",
@@ -488,6 +534,7 @@ def test_service_list_matches_endpoints_by_pid(monkeypatch) -> None:
             "homebase_cli.cli.local_profile",
             lambda: ClientProfile(
                 node_id="node-1",
+                node_name="app",
                 hostname="app",
                 platform="Linux 6.1",
                 version="0.1.8",
@@ -545,6 +592,7 @@ def test_service_show_uses_runtime_address(monkeypatch) -> None:
             "homebase_cli.cli.local_profile",
             lambda: ClientProfile(
                 node_id="node-1",
+                node_name="control",
                 hostname="control",
                 platform="Linux 6.1",
                 version="0.1.15",

@@ -29,24 +29,26 @@ def print_node_tree(rows: list[tuple[str, str]]) -> None:
     console.print(table)
 
 
-def print_scan_table(rows: list[tuple[str, str, str, str, str, str]]) -> None:
+def print_scan_table(rows: list[tuple[str, str, str, str, str, str, str]]) -> None:
     """Render discovered homebase clients from a scan."""
     table = Table(title="Homebase Client Scan")
     table.add_column("Address", style="cyan")
-    show_known = any(known for _, known, _, _, _, _ in rows)
+    show_known = any(known for _, known, _, _, _, _, _ in rows)
 
     if show_known:
         table.add_column("Known")
+    table.add_column("Node")
     table.add_column("Hostname")
-    table.add_column("Node ID")
+    table.add_column("Description")
     table.add_column("Platform")
     table.add_column("Version")
-    for address, known, hostname, node_id, platform, version in rows:
+    for address, known, node_name, hostname, description, platform, version in rows:
         cells = [address]
         if show_known:
             cells.append(known)
+        cells.append(node_name)
         cells.append(hostname)
-        cells.append(node_id)
+        cells.append(description)
         cells.append(platform)
         cells.append(version)
         table.add_row(*cells)

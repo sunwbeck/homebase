@@ -22,12 +22,14 @@ def test_parse_discovery_payload_validates_required_fields() -> None:
     discovery = parse_discovery_payload(
         {
             "node_id": "abc123",
+            "node_name": "app",
             "hostname": "app",
             "platform": "Linux 6.1",
             "version": "0.1.0",
         }
     )
     assert discovery.node_id == "abc123"
+    assert discovery.node_name == "app"
     assert discovery.hostname == "app"
 
 
@@ -35,6 +37,7 @@ def test_parse_profile_payload_includes_ports_and_services() -> None:
     profile = parse_profile_payload(
         {
             "node_id": "abc123",
+            "node_name": "app",
             "hostname": "app",
             "platform": "Linux 6.1",
             "version": "0.1.0",
@@ -43,6 +46,7 @@ def test_parse_profile_payload_includes_ports_and_services() -> None:
         }
     )
     assert profile.open_ports == (22, 8080)
+    assert profile.node_name == "app"
     assert profile.services == ("ssh", "docker")
 
 

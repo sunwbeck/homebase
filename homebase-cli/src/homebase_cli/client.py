@@ -44,6 +44,7 @@ class ClientDiscovery:
     """Minimal identity visible before pairing."""
 
     node_id: str
+    node_name: str
     hostname: str
     platform: str
     version: str
@@ -56,6 +57,7 @@ class ClientProfile:
     """Full client profile only available after pairing."""
 
     node_id: str
+    node_name: str
     hostname: str
     platform: str
     version: str
@@ -485,8 +487,10 @@ def local_discovery() -> ClientDiscovery:
     node_id = machine_id if machine_id else hostname
     platform_label = f"{platform_module.system()} {platform_module.release()}".strip()
     settings = load_settings()
+    node_name = settings.node_name or hostname
     return ClientDiscovery(
         node_id=node_id,
+        node_name=node_name,
         hostname=hostname,
         platform=platform_label,
         version=cli_version(),
@@ -502,6 +506,7 @@ def local_profile() -> ClientProfile:
     service_records = detect_service_records()
     return ClientProfile(
         node_id=discovery.node_id,
+        node_name=discovery.node_name,
         hostname=discovery.hostname,
         platform=discovery.platform,
         version=discovery.version,
@@ -517,6 +522,7 @@ def local_profile() -> ClientProfile:
 def parse_discovery_payload(payload: dict[str, Any]) -> ClientDiscovery:
     """Validate and normalize one fetched discovery payload."""
     node_id = str(payload.get("node_id", "")).strip()
+    node_name = str(payload.get("node_name", "")).strip()
     hostname = str(payload.get("hostname", "")).strip()
     platform = str(payload.get("platform", "")).strip()
     version_value = str(payload.get("version", "")).strip()
@@ -532,6 +538,7 @@ def parse_discovery_payload(payload: dict[str, Any]) -> ClientDiscovery:
         raise ValueError("discovery payload is missing version")
     return ClientDiscovery(
         node_id=node_id,
+        node_name=node_name or hostname,
         hostname=hostname,
         platform=platform,
         version=version_value,
@@ -596,6 +603,7 @@ def parse_profile_payload(payload: dict[str, Any]) -> ClientProfile:
         service_records = [(service, "running", None, "service", "") for service in services]
     return ClientProfile(
         node_id=discovery.node_id,
+        node_name=discovery.node_name,
         hostname=discovery.hostname,
         platform=discovery.platform,
         version=discovery.version,
