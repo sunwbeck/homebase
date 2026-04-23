@@ -20,10 +20,20 @@ First install:
 curl -fsSL https://raw.githubusercontent.com/sunwbeck/homebase/main/scripts/install-homebase.sh | bash
 ```
 
+The installer downloads the GitHub source tarball and installs `homebase-cli` from that unpacked source tree. It does not require `git`.
+
+On Debian or Ubuntu, the script will try to install Python venv support automatically if `python3-venv` is missing.
+
 Install a specific ref:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/sunwbeck/homebase/main/scripts/install-homebase.sh | bash -s -- --ref main
+```
+
+If your network or proxy serves a stale cached copy of the installer, use a commit-pinned URL instead:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/sunwbeck/homebase/c9c492c/scripts/install-homebase.sh | bash
 ```
 
 The install script sets up `homebase` for the current user and makes `homebase` and `hb` available from `~/.local/bin`.
