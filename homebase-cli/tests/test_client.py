@@ -13,12 +13,14 @@ from homebase_cli.client import (
     detect_primary_address,
     detect_service_records,
     load_client_state,
+    load_package_job_state,
     pair_controller,
     parse_package_install_request,
     parse_discovery_payload,
     parse_pair_request,
     parse_profile_payload,
     normalize_pair_code,
+    save_package_job_state,
     save_client_state,
     state_path,
 )
@@ -227,3 +229,18 @@ def test_control_service_uses_windows_service_backend(monkeypatch) -> None:
     assert calls
     assert "Get-Service -Name 'sshd'" in calls[0]
     assert "Start-Service -Name 'sshd'" in calls[0]
+
+
+def test_save_package_job_state_keeps_stage_history(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr("homebase_cli.client.PACKAGE_JOB_DIR", tmp_path)
+    save_package_job_state("job1", {"job_id": "job1", "step": 1, "total": 6, "label": "accepted request", "status": "running"})
+    save_package_job_state("job1", {"job_id": "job1", "step": 2, "total": 6, "label": "preparing source", "status": "running"})
+    save_package_job_state("job1", {"job_id": "job1", "step": 2, "total": 6, "label": "preparing source", "status": "running"})
+    save_package_job_state("job1", {"job_id": "job1", "step": 6, "total": 6, "label": "done", "status": "done"})
+    payload = load_package_job_state("job1")
+    assert payload is not None
+    assert payload["events"] == [
+        {"step": 1, "total": 6, "label": "accepted request", "status": "running"},
+        {"step": 2, "total": 6, "label": "preparing source", "status": "running"},
+        {"step": 6, "total": 6, "label": "done", "status": "done"},
+    ]

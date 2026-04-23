@@ -1069,7 +1069,25 @@ def save_package_job_state(job_id: str, payload: dict[str, Any]) -> Path:
     """Persist one package job state payload."""
     target = _package_job_path(job_id)
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    existing = {}
+    if target.exists():
+        try:
+            existing = json.loads(target.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            existing = {}
+    merged = dict(existing)
+    merged.update(payload)
+    existing_events = list(existing.get("events", [])) if isinstance(existing.get("events"), list) else []
+    step = merged.get("step")
+    total = merged.get("total")
+    label = merged.get("label")
+    status = merged.get("status")
+    event = {"step": step, "total": total, "label": label, "status": status}
+    if event["step"] is not None and event["total"] is not None and event["label"] is not None and event["status"] is not None:
+        if not existing_events or existing_events[-1] != event:
+            existing_events.append(event)
+    merged["events"] = existing_events
+    target.write_text(json.dumps(merged, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return target
 
 

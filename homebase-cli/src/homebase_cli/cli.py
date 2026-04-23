@@ -2382,6 +2382,7 @@ def package_install_command(
             job_id = secrets.token_hex(8)
             stage_callback(3, 6, "requesting remote install")
             result_holder: dict[str, object] = {}
+            seen_events = 0
 
             def run_request() -> None:
                 result_holder["payload"] = request_package_install(
@@ -2403,10 +2404,21 @@ def package_install_command(
                         port=node.client_port or DEFAULT_CLIENT_PORT,
                     )
                     if progress_payload is not None:
-                        step = int(progress_payload.get("step", 3) or 3)
-                        total = int(progress_payload.get("total", 6) or 6)
-                        label = str(progress_payload.get("label") or "running")
-                        stage_callback(step, total, label)
+                        events = progress_payload.get("events")
+                        if isinstance(events, list) and seen_events < len(events):
+                            for event in events[seen_events:]:
+                                if not isinstance(event, dict):
+                                    continue
+                                step = int(event.get("step", 3) or 3)
+                                total = int(event.get("total", 6) or 6)
+                                label = str(event.get("label") or "running")
+                                stage_callback(step, total, label)
+                            seen_events = len(events)
+                        else:
+                            step = int(progress_payload.get("step", 3) or 3)
+                            total = int(progress_payload.get("total", 6) or 6)
+                            label = str(progress_payload.get("label") or "running")
+                            stage_callback(step, total, label)
                     time.sleep(0.2)
             finally:
                 request_thread.shutdown(wait=True)
@@ -2501,6 +2513,7 @@ def package_update_command(
             job_id = secrets.token_hex(8)
             stage_callback(2, 6, "requesting remote update")
             result_holder: dict[str, object] = {}
+            seen_events = 0
 
             def run_request() -> None:
                 result_holder["payload"] = request_package_upgrade(
@@ -2521,10 +2534,21 @@ def package_update_command(
                         port=node.client_port or DEFAULT_CLIENT_PORT,
                     )
                     if progress_payload is not None:
-                        step = int(progress_payload.get("step", 2) or 2)
-                        total = int(progress_payload.get("total", 6) or 6)
-                        label = str(progress_payload.get("label") or "running")
-                        stage_callback(step, total, label)
+                        events = progress_payload.get("events")
+                        if isinstance(events, list) and seen_events < len(events):
+                            for event in events[seen_events:]:
+                                if not isinstance(event, dict):
+                                    continue
+                                step = int(event.get("step", 2) or 2)
+                                total = int(event.get("total", 6) or 6)
+                                label = str(event.get("label") or "running")
+                                stage_callback(step, total, label)
+                            seen_events = len(events)
+                        else:
+                            step = int(progress_payload.get("step", 2) or 2)
+                            total = int(progress_payload.get("total", 6) or 6)
+                            label = str(progress_payload.get("label") or "running")
+                            stage_callback(step, total, label)
                     time.sleep(0.2)
             finally:
                 request_thread.shutdown(wait=True)
