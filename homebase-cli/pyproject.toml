@@ -1,7 +1,7 @@
 [project]
 name = "homebase-cli"
-version = "0.1.4"
-description = "CLI workspace for the NAS-backed homebase."
+version = "0.1.5"
+description = "CLI workspace for homebase."
 requires-python = ">=3.11"
 dependencies = [
     "typer>=0.12,<1.0",

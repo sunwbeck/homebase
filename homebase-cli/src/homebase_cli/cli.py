@@ -1506,9 +1506,12 @@ def _build_node_app() -> typer.Typer:
 def _build_connect_app() -> typer.Typer:
     runtime_connect_app = typer.Typer(invoke_without_command=True, help="Connect controllers and managed nodes.")
     runtime_connect_app.callback()(connect_callback)
-    runtime_connect_app.command("scan")(node_scan_command)
-    runtime_connect_app.command("add")(node_add_command)
-    runtime_connect_app.command("code")(client_code_command)
+    current_role = _current_runtime_role()
+    if current_role != "managed":
+        runtime_connect_app.command("scan")(node_scan_command)
+        runtime_connect_app.command("add")(node_add_command)
+    if current_role != "controller":
+        runtime_connect_app.command("code")(client_code_command)
     runtime_connect_app.command("status")(connect_status_command)
     runtime_connect_app.command("profile", hidden=True)(client_profile_command)
     runtime_connect_app.command("identity", hidden=True)(client_identity_command)
