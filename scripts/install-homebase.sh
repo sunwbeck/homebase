@@ -35,6 +35,18 @@ install_venv_support() {
   run_privileged apt-get install -y python3-venv
 }
 
+install_git_support() {
+  if command -v git >/dev/null 2>&1; then
+    return 0
+  fi
+  if ! command -v apt-get >/dev/null 2>&1; then
+    return 1
+  fi
+  echo "Installing git"
+  run_privileged apt-get update
+  run_privileged apt-get install -y git
+}
+
 usage() {
   cat <<'EOF'
 Usage: install-homebase.sh [--ref <git-ref>] [--repo <git-url>] [--python <python-bin>] [--venv <venv-path>]
@@ -108,6 +120,15 @@ else
   fi
   install_python="${managed_venv}/bin/python"
   mkdir -p "${HOME}/.local/bin"
+fi
+
+if ! command -v git >/dev/null 2>&1; then
+  if ! install_git_support; then
+    echo >&2
+    echo "git is required to install homebase from GitHub." >&2
+    echo "Install git first, then rerun this installer." >&2
+    exit 1
+  fi
 fi
 
 "${install_python}" -m pip install --upgrade pip
