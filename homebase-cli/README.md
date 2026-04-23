@@ -6,7 +6,7 @@ The installed command is `homebase`. `hb` is just the short alias.
 
 It provides two things in one package:
 
-- the operator CLI used on the control node
+- the operator CLI used on the controller node
 - the small client service used on managed nodes
 
 ## Main Commands

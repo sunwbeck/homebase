@@ -1,6 +1,6 @@
 # homebase
 
-`homebase` is a control CLI and lightweight node client for managing a personal home-server setup.
+`homebase` is a controller CLI and lightweight node client for managing a personal home-server setup.
 
 The installed command is `homebase`. `hb` is just the short alias.
 
@@ -10,7 +10,7 @@ What it does:
 - shows node information and basic status
 - runs a small client service on each managed node
 - installs and updates `homebase` from GitHub refs
-- lets the control node request installs and updates on other paired nodes
+- lets the controller node request installs and updates on other paired nodes
 
 ## Install
 
@@ -30,7 +30,7 @@ The install script sets up `homebase` for the current user and makes `homebase` 
 
 ## Basic Flow
 
-On the control node:
+On the controller node:
 
 ```bash
 homebase init
@@ -55,8 +55,8 @@ Pairing flow:
 
 1. start `homebase client serve` on the target node
 2. read the 8-digit code from `homebase client code --refresh`
-3. run `homebase node scan` on the control node
-4. run `homebase node add` on the control node and enter the code
+3. run `homebase node scan` on the controller node
+4. run `homebase node add` on the controller node and enter the code
 
 `homebase init` registers the current machine with a local node name as well as a node type.
 
@@ -96,7 +96,7 @@ Use object commands when you want to inspect or change one area directly.
 homebase role show
 homebase role list
 homebase role show host.app
-homebase role edit control
+homebase role edit controller
 homebase role edit host.app managed
 homebase node list
 homebase node show host.app

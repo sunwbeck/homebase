@@ -9,7 +9,7 @@ import tomllib
 
 
 DEFAULT_SETTINGS_PATH = Path.home() / ".config" / "homebase" / "settings.toml"
-RUNTIME_ROLES = ("control", "managed")
+RUNTIME_ROLES = ("controller", "managed")
 
 
 @dataclass(frozen=True)
@@ -33,6 +33,8 @@ def _normalize_runtime_role(value: str | None) -> str | None:
         return None
     if normalized == "client":
         return "managed"
+    if normalized == "control":
+        return "controller"
     return normalized
 
 

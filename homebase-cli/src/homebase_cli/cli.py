@@ -76,12 +76,12 @@ from homebase_cli.settings import (
 )
 
 
-app = typer.Typer(no_args_is_help=True, help="Manage homebase control and managed nodes.")
+app = typer.Typer(no_args_is_help=True, help="Manage homebase controller and managed nodes.")
 connect_app = typer.Typer(invoke_without_command=True, help="Discover and register managed nodes.")
 node_app = typer.Typer(invoke_without_command=True, help="Inspect and manage registered nodes.")
 group_app = typer.Typer(invoke_without_command=True, help="Inspect and manage groups.")
 link_app = typer.Typer(invoke_without_command=True, help="Inspect and manage parent-child group links.")
-role_app = typer.Typer(invoke_without_command=True, help="Show or change the local role: control or managed.")
+role_app = typer.Typer(invoke_without_command=True, help="Show or change the local role: controller or managed.")
 ansible_app = typer.Typer(help="Run ansible-related helper commands.")
 client_app = typer.Typer(help="Run the homebase client service on one managed node.")
 inventory_app = typer.Typer(invoke_without_command=True, help="Show or open the ansible inventory YAML.")
@@ -92,7 +92,7 @@ package_app = typer.Typer(
 )
 dev_app = typer.Typer(help="Development and internal commands.")
 console = Console()
-DEFAULT_KIND_CHOICES = ("control", "workstation", "host", "vm", "node")
+DEFAULT_KIND_CHOICES = ("controller", "workstation", "host", "vm", "node")
 
 
 def _show_group_help(ctx: typer.Context) -> None:
@@ -405,7 +405,7 @@ def node_scan_command(
     timeout: float = typer.Option(0.35, "--timeout", help="Per-host timeout in seconds."),
 ) -> None:
     """Scan a local network for homebase clients and update the discovery cache."""
-    _require_role("control")
+    _require_role("controller")
     networks = (cidr,) if cidr is not None else detect_scannable_networks()
     if not networks:
         console.print("[yellow]No scannable IPv4 networks detected.[/yellow]")
@@ -439,13 +439,13 @@ def node_scan_command(
 def node_add_command(
     name: str | None = typer.Argument(None, help="Canonical node name such as host.app."),
     parent: str | None = typer.Option(None, "--parent", help="Optional parent node such as host."),
-    kind: str | None = typer.Option(None, "--kind", help="Node kind such as control, workstation, host, vm, or node."),
+    kind: str | None = typer.Option(None, "--kind", help="Node kind such as controller, workstation, host, vm, or node."),
     ssh_user: str | None = typer.Option(None, "--ssh-user", help="SSH user for the node."),
     description: str = typer.Option("", "--description", help="Short human-readable description."),
     client_port: int = typer.Option(DEFAULT_CLIENT_PORT, "--client-port", help="TCP port exposed by the homebase client."),
 ) -> None:
     """Add one node to the persistent local registry, preferably from discovered clients."""
-    _require_role("control")
+    _require_role("controller")
     selected = _choose_discovered_node()
     profile = _resolve_profile_for_node(selected, client_port)
     resolved_name = name or typer.prompt("Node name", default=selected.discovery.hostname)
@@ -476,14 +476,14 @@ def node_add_command(
 @app.command("status")
 def status_command() -> None:
     """Show the current registered nodes, groups, and basic state."""
-    _require_role("control")
+    _require_role("controller")
     _print_registered_overview()
 
 
 @node_app.command("list")
 def node_list_command(resource: str | None = typer.Argument(None, help="Optional resource path such as host.")) -> None:
     """List all registered nodes, or child nodes under one parent."""
-    _require_role("control")
+    _require_role("controller")
     if resource is None:
         resources = load_nodes()
     else:
@@ -509,7 +509,7 @@ def node_list_command(resource: str | None = typer.Argument(None, help="Optional
 @node_app.command("show")
 def node_show_command(resource: str = typer.Argument(..., help="Canonical node name.")) -> None:
     """Show detailed information for one registered node."""
-    _require_role("control")
+    _require_role("controller")
     item = find_resource(resource)
     if item is None:
         raise typer.BadParameter(f"unknown resource: {resource}")
@@ -548,7 +548,7 @@ def ansible_inventory_command(
     output: Path | None = typer.Option(None, "--output", help="Optional output path for the rendered inventory."),
 ) -> None:
     """Render the current node registry as an ansible YAML inventory."""
-    _require_role("control")
+    _require_role("controller")
     if output is None:
         output = Path("inventory.yml")
     write_ansible_inventory(output)
@@ -558,7 +558,7 @@ def ansible_inventory_command(
 @ansible_app.command("ping")
 def ansible_ping_command(node: str = typer.Argument(..., help="Registered node name.")) -> None:
     """Run ansible ping against one registered node."""
-    _require_role("control")
+    _require_role("controller")
     result = ansible_ping(node)
     if result.stdout:
         console.print(result.stdout)
@@ -635,10 +635,10 @@ def client_serve_command(
 
 @app.command("init")
 def init_command(
-    role: str | None = typer.Option(None, "--role", help="Optional node type to set directly: control or managed."),
+    role: str | None = typer.Option(None, "--role", help="Optional node type to set directly: controller or managed."),
     name: str | None = typer.Option(None, "--name", help="Optional local node name to register directly."),
 ) -> None:
-    """Initialize this installation as a control node or managed node."""
+    """Initialize this installation as a controller node or managed node."""
     selected = role.strip().lower() if role is not None else _choose_runtime_role()
     selected_name = (name.strip() if name is not None else "") or typer.prompt("Node name", default=_current_node_name() or socket.gethostname())
     try:
@@ -660,7 +660,7 @@ def init_command(
 @app.command("list", hidden=True)
 def inventory_list_command(target: str | None = typer.Argument(None, help="Optional node or group name.")) -> None:
     """List registered nodes and groups, or show one node or group."""
-    _require_role("control")
+    _require_role("controller")
     groups = load_role_groups()
     nodes = load_nodes()
     if target is not None:
@@ -726,7 +726,7 @@ def role_show_command(target: str | None = typer.Argument(None, help="Optional n
     if target is None:
         _print_local_role()
         return
-    _require_role("control")
+    _require_role("controller")
     node = find_node(target)
     if node is None:
         raise typer.BadParameter(f"unknown node: {target}")
@@ -738,7 +738,7 @@ def role_show_command(target: str | None = typer.Argument(None, help="Optional n
 @role_app.command("list")
 def role_list_command() -> None:
     """List registered nodes and their roles."""
-    _require_role("control")
+    _require_role("controller")
     nodes = load_nodes()
     if not nodes:
         console.print("registered nodes: none")
@@ -763,7 +763,7 @@ def role_edit_command(
     if runtime_role is None:
         _set_local_role(target_or_role)
         return
-    _require_role("control")
+    _require_role("controller")
     try:
         updated = set_node_runtime_role(target_or_role, runtime_role)
     except ValueError as exc:
@@ -777,7 +777,7 @@ def inventory_name_command(
     edit: str | None = typer.Option(None, "--edit", help="New node name."),
 ) -> None:
     """Show or edit one registered node name."""
-    _require_role("control")
+    _require_role("controller")
     resource = _resolve_inventory_node_target(target)
     node = find_node(resource)
     if node is None:
@@ -818,7 +818,7 @@ def node_edit_command(
 @group_app.command("list")
 def group_list_command(target: str | None = typer.Argument(None, help="Optional group name.")) -> None:
     """List groups, or show one group."""
-    _require_role("control")
+    _require_role("controller")
     if target is None:
         groups = load_role_groups()
         if not groups:
@@ -838,14 +838,14 @@ def group_list_command(target: str | None = typer.Argument(None, help="Optional 
 @group_app.command("show")
 def group_show_command(group: str = typer.Argument(..., help="Group name.")) -> None:
     """Show one group."""
-    _require_role("control")
+    _require_role("controller")
     _show_group_details(group)
 
 
 @group_app.command("add")
 def group_add_command(group: str = typer.Argument(..., help="New group name.")) -> None:
     """Add one group."""
-    _require_role("control")
+    _require_role("controller")
     try:
         created = add_role_group(name=group, description="")
     except ValueError as exc:
@@ -860,7 +860,7 @@ def group_edit_command(
     value: str = typer.Argument(..., help="New value."),
 ) -> None:
     """Edit one group."""
-    _require_role("control")
+    _require_role("controller")
     normalized = field.strip().lower()
     try:
         if normalized == "name":
@@ -879,7 +879,7 @@ def group_edit_command(
 @group_app.command("remove")
 def group_remove_command(group: str = typer.Argument(..., help="Group name.")) -> None:
     """Remove one group."""
-    _require_role("control")
+    _require_role("controller")
     try:
         remove_role_group(group)
     except ValueError as exc:
@@ -895,7 +895,7 @@ def inventory_link_command(
     remove: bool = typer.Option(False, "--remove", help="Remove the link."),
 ) -> None:
     """Add or remove one group-to-group link."""
-    _require_role("control")
+    _require_role("controller")
     if add == remove:
         raise typer.BadParameter("choose exactly one action: --add or --remove")
     try:
@@ -912,7 +912,7 @@ def inventory_link_command(
 @link_app.command("list")
 def link_list_command(group: str | None = typer.Argument(None, help="Optional parent group name.")) -> None:
     """List group-to-group links."""
-    _require_role("control")
+    _require_role("controller")
     groups = load_role_groups()
     table = Table(show_header=True, header_style="bold")
     table.add_column("Parent")
@@ -956,7 +956,7 @@ def inventory_assign_command(
     remove: bool = typer.Option(False, "--remove", help="Remove the assignment."),
 ) -> None:
     """Add or remove one node-to-group assignment."""
-    _require_role("control")
+    _require_role("controller")
     if add == remove:
         raise typer.BadParameter("choose exactly one action: --add or --remove")
     try:
@@ -991,7 +991,7 @@ def node_unassign_command(
 @inventory_app.command("show")
 def inventory_show_command() -> None:
     """Show the ansible inventory YAML."""
-    _require_role("control")
+    _require_role("controller")
     target = write_ansible_inventory()
     console.print(f"[green]Inventory YAML:[/green] {target}")
     console.print(target.read_text(encoding="utf-8"))
@@ -1000,7 +1000,7 @@ def inventory_show_command() -> None:
 @inventory_app.command("edit")
 def inventory_edit_command() -> None:
     """Open the ansible inventory YAML in the configured editor."""
-    _require_role("control")
+    _require_role("controller")
     target = open_ansible_inventory()
     console.print(f"[green]Opened ansible inventory:[/green] {target}")
 
@@ -1008,7 +1008,7 @@ def inventory_edit_command() -> None:
 @state_app.command("show")
 def state_show_command(resource: str = typer.Argument(..., help="Resource path such as host.app.")) -> None:
     """Show saved state values for one registered node."""
-    _require_role("control")
+    _require_role("controller")
     node = find_node(resource)
     if node is None:
         raise typer.BadParameter(f"unknown node: {resource}")
@@ -1031,7 +1031,7 @@ def state_set_command(
     value: str = typer.Argument(..., help="State value."),
 ) -> None:
     """Set one saved state value on one registered node."""
-    _require_role("control")
+    _require_role("controller")
     try:
         set_node_state(resource, key, value)
     except ValueError as exc:
@@ -1045,7 +1045,7 @@ def state_unset_command(
     key: str = typer.Argument(..., help="State key."),
 ) -> None:
     """Remove one saved state value from one registered node."""
-    _require_role("control")
+    _require_role("controller")
     try:
         unset_node_state(resource, key)
     except ValueError as exc:
@@ -1059,7 +1059,7 @@ def package_status_command(
 ) -> None:
     """Show the currently installed homebase revision on this node or one managed node."""
     if resource is not None:
-        _require_role("control")
+        _require_role("controller")
         node, port = _resolve_remote_package_target(resource)
         payload = fetch_package_status(node.address, port=port)
         if payload is None:
@@ -1211,7 +1211,7 @@ def package_install_command(
         selected_ref = chosen.ref
         selected_summary = chosen.summary
     if resource is not None:
-        _require_role("control")
+        _require_role("controller")
         node, port = _resolve_remote_package_target(resource)
         with Progress(
             SpinnerColumn(),
@@ -1260,7 +1260,7 @@ def package_update_command(
     console.print(f"[bold]Selected latest target:[/bold] {latest.version}")
     console.print(f"summary: {latest.summary}")
     if resource is not None:
-        _require_role("control")
+        _require_role("controller")
         node, port = _resolve_remote_package_target(resource)
         with Progress(
             SpinnerColumn(),
@@ -1385,10 +1385,10 @@ def _build_dev_app() -> typer.Typer:
 
 
 def _build_root_app() -> typer.Typer:
-    runtime_app = typer.Typer(no_args_is_help=True, help="Manage homebase control and managed nodes.")
+    runtime_app = typer.Typer(no_args_is_help=True, help="Manage homebase controller and managed nodes.")
     runtime_app.command("init")(init_command)
     current_role = _current_runtime_role()
-    if current_role in (None, "control"):
+    if current_role in (None, "controller"):
         runtime_app.command("status")(status_command)
         runtime_app.add_typer(_build_role_app(), name="role")
         runtime_app.add_typer(_build_node_app(), name="node")

@@ -11,7 +11,7 @@ from homebase_cli.paths import LOCAL_CLI_ROOT
 
 
 DEFAULT_REGISTRY_PATH = LOCAL_CLI_ROOT / "config" / "nodes.toml"
-NODE_RUNTIME_ROLES = ("control", "managed")
+NODE_RUNTIME_ROLES = ("controller", "managed")
 
 
 @dataclass(frozen=True)
@@ -54,11 +54,13 @@ def normalize_node_runtime_role(value: str | None, *, kind: str | None = None) -
     normalized = (value or "").strip().lower()
     if normalized == "client":
         normalized = "managed"
+    if normalized == "control":
+        normalized = "controller"
     if normalized in NODE_RUNTIME_ROLES:
         return normalized
     inferred_kind = (kind or "").strip().lower()
-    if inferred_kind == "control":
-        return "control"
+    if inferred_kind in {"control", "controller"}:
+        return "controller"
     return "managed"
 
 
@@ -324,7 +326,7 @@ def rename_node(name: str, new_name: str, path: Path | None = None) -> Node:
 
 
 def set_node_runtime_role(name: str, runtime_role: str, path: Path | None = None) -> Node:
-    """Set one node runtime role to control or managed."""
+    """Set one node runtime role to controller or managed."""
     normalized_name = name.strip()
     normalized_runtime_role = normalize_node_runtime_role(runtime_role)
     nodes = load_nodes(path)
@@ -380,7 +382,7 @@ def ensure_local_node(
             existing = rename_node(previous.name, normalized_name, path=path)
             nodes = load_nodes(path)
     if existing is None:
-        kind = "control" if normalize_node_runtime_role(runtime_role) == "control" else "node"
+        kind = "controller" if normalize_node_runtime_role(runtime_role) == "controller" else "node"
         return add_node(
             name=normalized_name,
             kind=kind,
@@ -397,7 +399,7 @@ def ensure_local_node(
         updated = Node(
             name=node.name,
             parent=node.parent,
-            kind="control" if normalize_node_runtime_role(runtime_role) == "control" else node.kind,
+            kind="controller" if normalize_node_runtime_role(runtime_role) == "controller" else node.kind,
             runtime_role=normalize_node_runtime_role(runtime_role, kind=node.kind),
             address=node.address,
             ssh_user=node.ssh_user,
