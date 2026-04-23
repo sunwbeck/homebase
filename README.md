@@ -36,8 +36,8 @@ On the control node:
 homebase init
 homebase node scan
 homebase node add
-homebase inventory group --add host-node
-homebase inventory assign host.app host-node --add
+homebase --select host-node --add app-tier
+homebase --select host.app --add app-tier
 homebase state set host.app status active
 ```
 
@@ -82,25 +82,31 @@ What they do:
 
 ## Inventory And State Commands
 
-`homebase inventory` manages registered node names, node types, groups, links, assignments, and the local node role.
+Use `homebase --select ...` when you want to inspect or change one local role, node, or group directly.
+
+```bash
+homebase --select role --description
+homebase --select role --edit control
+homebase --select host.app --description
+homebase --select host.app --edit host.api
+homebase --select host.app --add app-tier
+homebase --select host.app --remove app-tier
+homebase --select host-node --description
+homebase --select host-node --edit host-cluster
+homebase --select host-node --add app-tier
+homebase --select host-node --remove app-tier
+```
+
+Use `homebase inventory` when you want to browse everything or inspect the ansible-style YAML.
 
 ```bash
 homebase inventory list
 homebase inventory list host.app
-homebase inventory role show
-homebase inventory role set control
-homebase inventory group --add host-node
-homebase inventory group --add app-tier
-homebase inventory link host-node app-tier --add
-homebase inventory assign host.app app-tier --add
-homebase inventory type host.app --edit managed
-homebase inventory name host.app --edit host.api
 homebase inventory file
-homebase inventory file --write
 homebase inventory file --open
 ```
 
-`homebase inventory file --write` writes the current inventory out as ansible YAML.
+`homebase inventory file` refreshes the ansible YAML and prints the YAML contents. `homebase inventory file --open` opens that YAML in your editor.
 
 `homebase state` stores simple key/value labels on registered nodes.
 

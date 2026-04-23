@@ -76,12 +76,11 @@ from homebase_cli.settings import (
 )
 
 
-app = typer.Typer(no_args_is_help=True, help="Manage homebase control and client nodes.")
+app = typer.Typer(invoke_without_command=True, help="Manage homebase control and managed nodes.")
 node_app = typer.Typer(help="Scan for clients and inspect registered nodes.")
 ansible_app = typer.Typer(help="Run ansible-related helper commands.")
 client_app = typer.Typer(help="Run the homebase client service on one managed node.")
-inventory_app = typer.Typer(invoke_without_command=True, help="Inspect and manage registered nodes, groups, and local role.")
-inventory_role_app = typer.Typer(invoke_without_command=True, help="Show or change the local node role.")
+inventory_app = typer.Typer(invoke_without_command=True, help="Browse registered nodes, groups, and inventory YAML.")
 state_app = typer.Typer(invoke_without_command=True, help="Store and inspect saved state values for registered nodes.")
 package_app = typer.Typer(
     invoke_without_command=True,
@@ -173,6 +172,110 @@ def _count_actions(*values: object) -> int:
     return sum(1 for value in values if value not in (None, False, ""))
 
 
+def _find_group(name: str) -> RoleGroup | None:
+    normalized = name.strip()
+    for group in load_role_groups():
+        if group.name == normalized:
+            return group
+    return None
+
+
+def _show_node_details(node_name: str) -> None:
+    node = find_node(node_name)
+    if node is None:
+        raise typer.BadParameter(f"unknown node: {node_name}")
+    console.print(f"[bold]Node: {node.name}[/bold]")
+    console.print(f"type: {node.runtime_role}")
+    console.print(f"groups: {', '.join(node.role_groups) if node.role_groups else 'none'}")
+    if node.parent:
+        console.print(f"parent: {node.parent}")
+    console.print(f"kind: {node.kind}")
+
+
+def _show_group_details(group_name: str) -> None:
+    group = _find_group(group_name)
+    if group is None:
+        raise typer.BadParameter(f"unknown group: {group_name}")
+    assigned_nodes = [node.name for node in load_nodes() if group.name in node.role_groups]
+    console.print(f"[bold]Group: {group.name}[/bold]")
+    console.print(f"members: {', '.join(group.members) if group.members else 'none'}")
+    console.print(f"assigned nodes: {', '.join(assigned_nodes) if assigned_nodes else 'none'}")
+    console.print(f"description: {group.description or 'none'}")
+
+
+def _print_local_role() -> None:
+    settings = load_settings()
+    console.print(f"role: {settings.role or 'not set'}")
+    console.print(f"node: {settings.node_name or 'not set'}")
+
+
+def _set_local_role(runtime_role: str) -> None:
+    try:
+        updated = set_role(runtime_role)
+        local_name = _current_node_name()
+        if local_name:
+            ensure_local_node(local_name, updated.role or "managed", runtime_hostname=socket.gethostname())
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    console.print(f"[green]Set local node type to {updated.role}[/green]")
+
+
+def _handle_selected_action(select: str, description: bool, add: str | None, remove: str | None, edit: str | None) -> None:
+    action_count = _count_actions(description, add, remove, edit)
+    if action_count == 0:
+        raise typer.BadParameter("choose one action for --select: --description, --add, --remove, or --edit")
+    if action_count > 1:
+        raise typer.BadParameter("use only one action at a time with --select")
+
+    selected = select.strip()
+    if selected in {"role", "local-role"}:
+        if description:
+            _print_local_role()
+            return
+        if edit is not None:
+            _set_local_role(edit)
+            return
+        raise typer.BadParameter("local role supports only --description and --edit")
+
+    _require_role("control")
+
+    node = find_node(selected)
+    if node is not None:
+        if description:
+            _show_node_details(node.name)
+            return
+        if edit is not None:
+            inventory_name_command(node.name, edit=edit)
+            return
+        if add is not None:
+            inventory_assign_command(node.name, add, add=True, remove=False)
+            return
+        if remove is not None:
+            inventory_assign_command(node.name, remove, add=False, remove=True)
+            return
+
+    group = _find_group(selected)
+    if group is not None:
+        if description:
+            _show_group_details(group.name)
+            return
+        if edit is not None:
+            try:
+                updated = rename_role_group(group.name, edit)
+            except ValueError as exc:
+                raise typer.BadParameter(str(exc)) from exc
+            console.print(f"[green]Renamed group:[/green] {group.name} -> {updated.name}")
+            return
+        if add is not None:
+            inventory_link_command(group.name, add, add=True, remove=False)
+            return
+        if remove is not None:
+            inventory_link_command(group.name, remove, add=False, remove=True)
+            return
+
+    raise typer.BadParameter(f"unknown selection: {select}")
+
+
 def _render_group_tree(name: str, index: dict[str, object], rows: list[tuple[str, str]], depth: int = 0, seen: set[str] | None = None) -> None:
     if seen is None:
         seen = set()
@@ -187,15 +290,6 @@ def _render_group_tree(name: str, index: dict[str, object], rows: list[tuple[str
     rows.append((f'{"  " * depth}{group.name}', "group"))
     for member in group.members:
         _render_group_tree(member, index, rows, depth + 1, seen.copy())
-
-
-@inventory_role_app.callback()
-def inventory_role_callback(ctx: typer.Context) -> None:
-    """Show standard help when inventory role is called without a subcommand."""
-    if ctx.invoked_subcommand is not None:
-        return
-    console.print(ctx.get_help())
-    raise typer.Exit(code=0)
 
 
 @inventory_app.callback()
@@ -221,6 +315,25 @@ def package_callback(ctx: typer.Context) -> None:
     """Show standard help when package is called without a subcommand."""
     if ctx.invoked_subcommand is not None:
         return
+    console.print(ctx.get_help())
+    raise typer.Exit(code=0)
+
+
+@app.callback()
+def root_callback(
+    ctx: typer.Context,
+    select: str | None = typer.Option(None, "--select", help="Select one local role, node, or group to inspect or change."),
+    description: bool = typer.Option(False, "--description", help="Show details for the selected role, node, or group."),
+    add: str | None = typer.Option(None, "--add", help="Add one related item to the selected node or group."),
+    remove: str | None = typer.Option(None, "--remove", help="Remove one related item from the selected node or group."),
+    edit: str | None = typer.Option(None, "--edit", help="Replace the selected role, node, or group with a new value."),
+) -> None:
+    """Handle generic selection-based inspection and editing."""
+    if ctx.invoked_subcommand is not None:
+        return
+    if select is not None:
+        _handle_selected_action(select, description, add, remove, edit)
+        raise typer.Exit(code=0)
     console.print(ctx.get_help())
     raise typer.Exit(code=0)
 
@@ -553,29 +666,6 @@ def init_command(
     console.print(f"[green]Registered local node name:[/green] {local_node.name}")
 
 
-@inventory_role_app.command("show")
-def role_show_command() -> None:
-    """Show the local node role and registered local node name."""
-    settings = load_settings()
-    console.print(f"role: {settings.role or 'not set'}")
-    console.print(f"node: {settings.node_name or 'not set'}")
-
-
-@inventory_role_app.command("set")
-def role_set_command(
-    runtime_role: str = typer.Argument(..., help="control or managed."),
-) -> None:
-    """Set the local node role to control or managed."""
-    try:
-        updated = set_role(runtime_role)
-        local_name = _current_node_name()
-        if local_name:
-            ensure_local_node(local_name, updated.role or "managed", runtime_hostname=socket.gethostname())
-    except ValueError as exc:
-        raise typer.BadParameter(str(exc)) from exc
-    console.print(f"[green]Set local node type to {updated.role}[/green]")
-
-
 @inventory_app.command("list")
 def inventory_list_command(target: str | None = typer.Argument(None, help="Optional node or group name.")) -> None:
     """List registered nodes and groups, or show one node or group."""
@@ -639,7 +729,7 @@ def inventory_list_command(target: str | None = typer.Argument(None, help="Optio
     console.print(table)
 
 
-@inventory_app.command("name")
+@inventory_app.command("name", hidden=True)
 def inventory_name_command(
     target: str | None = typer.Argument(None, help="Optional node name. Defaults to the local node."),
     edit: str | None = typer.Option(None, "--edit", help="New node name."),
@@ -662,7 +752,7 @@ def inventory_name_command(
     console.print(f"[green]Renamed node:[/green] {node.name} -> {renamed.name}")
 
 
-@inventory_app.command("type")
+@inventory_app.command("type", hidden=True)
 def inventory_type_command(
     target: str | None = typer.Argument(None, help="Optional node name. Defaults to the local node."),
     edit: str | None = typer.Option(None, "--edit", help="New node type: control or managed."),
@@ -683,12 +773,11 @@ def inventory_type_command(
     console.print(f"[green]Set node type:[/green] {updated.name} -> {updated.runtime_role}")
 
 
-@inventory_app.command("group")
+@inventory_app.command("group", hidden=True)
 def inventory_group_command(
     add: str | None = typer.Option(None, "--add", help="Add one group."),
     remove: str | None = typer.Option(None, "--remove", help="Remove one group."),
     edit: str | None = typer.Option(None, "--edit", help="Edit one existing group."),
-    to: str | None = typer.Option(None, "--to", help="New group name when editing."),
     description: str | None = typer.Option(None, "--description", help="Group description when adding or editing."),
 ) -> None:
     """Add, remove, or edit one group."""
@@ -706,10 +795,7 @@ def inventory_group_command(
             console.print(f"[green]Removed group:[/green] {remove.strip().lower()}")
             return
         assert edit is not None
-        current_name = edit.strip()
-        updated_name = current_name
-        if to is not None:
-            updated_name = rename_role_group(current_name, to).name
+        updated_name = edit.strip()
         if description is not None:
             updated_name = set_role_group_description(updated_name, description).name
         console.print(f"[green]Updated group:[/green] {updated_name}")
@@ -717,7 +803,7 @@ def inventory_group_command(
         raise typer.BadParameter(str(exc)) from exc
 
 
-@inventory_app.command("link")
+@inventory_app.command("link", hidden=True)
 def inventory_link_command(
     parent: str = typer.Argument(..., help="Parent group name."),
     child: str = typer.Argument(..., help="Child group name."),
@@ -739,7 +825,7 @@ def inventory_link_command(
         raise typer.BadParameter(str(exc)) from exc
 
 
-@inventory_app.command("assign")
+@inventory_app.command("assign", hidden=True)
 def inventory_assign_command(
     resource: str = typer.Argument(..., help="Resource path such as host.app."),
     group: str = typer.Argument(..., help="Group name."),
@@ -763,20 +849,17 @@ def inventory_assign_command(
 
 @inventory_app.command("file")
 def inventory_file_command(
-    write: bool = typer.Option(False, "--write", help="Write the current ansible inventory YAML file."),
     open_file: bool = typer.Option(False, "--open", help="Open the ansible inventory YAML file in $EDITOR after writing it."),
 ) -> None:
-    """Show, write, or open the ansible inventory YAML file."""
+    """Show or open the ansible inventory YAML file."""
     _require_role("control")
     if open_file:
         target = open_ansible_inventory()
         console.print(f"[green]Opened ansible inventory:[/green] {target}")
         return
-    if write:
-        target = write_ansible_inventory()
-        console.print(f"[green]Wrote ansible inventory:[/green] {target}")
-        return
-    console.print(ansible_inventory_path())
+    target = write_ansible_inventory()
+    console.print(f"[green]Inventory YAML:[/green] {target}")
+    console.print(target.read_text(encoding="utf-8"))
 
 
 @state_app.command("show")
@@ -1120,11 +1203,11 @@ def _build_dev_app() -> typer.Typer:
 
 
 def _build_root_app() -> typer.Typer:
-    runtime_app = typer.Typer(no_args_is_help=True, help="Manage homebase control and managed nodes.")
+    runtime_app = typer.Typer(invoke_without_command=True, help="Manage homebase control and managed nodes.")
+    runtime_app.callback()(root_callback)
     runtime_app.command("init")(init_command)
     current_role = _current_runtime_role()
     if current_role in (None, "control"):
-        inventory_app.add_typer(inventory_role_app, name="role")
         runtime_app.add_typer(inventory_app, name="inventory")
         runtime_app.add_typer(state_app, name="state")
         runtime_app.add_typer(_build_node_app(), name="node")

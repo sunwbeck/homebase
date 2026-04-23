@@ -149,6 +149,18 @@ def test_init_registers_local_node_and_inventory_list_shows_it(monkeypatch) -> N
         assert "control" in status_result.stdout
 
 
+def test_root_select_role_shows_local_role(monkeypatch) -> None:
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        env = {"HOMEBASE_SETTINGS_PATH": "settings.toml", "HOMEBASE_REGISTRY_PATH": "nodes.toml"}
+        app = load_app(monkeypatch, "settings.toml")
+        runner.invoke(app, ["init", "--role", "control", "--name", "control"], env=env)
+        result = runner.invoke(app, ["--select", "role", "--description"], env=env)
+        assert result.exit_code == 0
+        assert "role: control" in result.stdout
+        assert "node: control" in result.stdout
+
+
 def test_inventory_group_commands_build_hierarchy(monkeypatch) -> None:
     runner = CliRunner()
     with runner.isolated_filesystem():
@@ -172,6 +184,19 @@ def test_inventory_group_commands_build_hierarchy(monkeypatch) -> None:
         assert "managed" in tree_result.stdout
         assert "host-node" in tree_result.stdout
         assert "app-tier" in tree_result.stdout
+
+
+def test_root_select_node_can_assign_group(monkeypatch) -> None:
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        env = {"HOMEBASE_SETTINGS_PATH": "settings.toml", "HOMEBASE_REGISTRY_PATH": "nodes.toml"}
+        Path("settings.toml").write_text('role = "control"\nnode_name = "control"\n', encoding="utf-8")
+        Path("nodes.toml").write_text('[[nodes]]\nname = "host.app"\nkind = "vm"\nruntime_role = "managed"\n\n[[role_groups]]\nname = "app-tier"\nmembers = []\n', encoding="utf-8")
+        app = load_app(monkeypatch, "settings.toml")
+        result = runner.invoke(app, ["--select", "host.app", "--add", "app-tier"], env=env)
+        assert result.exit_code == 0
+        details = runner.invoke(app, ["--select", "host.app", "--description"], env=env)
+        assert "app-tier" in details.stdout
 
 
 def test_inventory_can_rename_node_and_set_type(monkeypatch) -> None:
