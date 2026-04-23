@@ -14,7 +14,7 @@ from datetime import UTC, datetime
 
 import click
 import typer
-from rich.progress import BarColumn, Progress, TaskID, SpinnerColumn, TaskProgressColumn, TextColumn
+from rich.progress import BarColumn, Progress, SpinnerColumn, TaskProgressColumn, TextColumn, TimeElapsedColumn
 from rich.table import Table
 from rich.console import Console
 
@@ -504,11 +504,17 @@ def _run_package_batch(
         return []
     rows: dict[str, tuple[str, ...]] = {}
     max_workers = min(8, max(1, len(selected_nodes)))
-    with _package_progress() as progress:
+    progress = Progress(
+        SpinnerColumn(),
+        TextColumn("{task.description}"),
+        TimeElapsedColumn(),
+        console=console,
+    )
+    with progress:
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             future_map = {}
             for node in selected_nodes:
-                task_id = progress.add_task(f"{description_prefix}: {node.name}", total=100)
+                task_id = progress.add_task(f"{description_prefix}: {node.name} (running)", total=None)
                 future = executor.submit(worker, node)
                 future_map[future] = (node, task_id)
             while future_map:
@@ -517,12 +523,8 @@ def _run_package_batch(
                     if future.done():
                         payload = future.result()
                         rows[node.name] = row_builder(node, payload)
-                        progress.update(task_id, completed=100)
+                        progress.update(task_id, description=f"{description_prefix}: {node.name} (done)")
                         finished.append(future)
-                        continue
-                    current = progress.tasks[task_id].completed
-                    if current < 92:
-                        progress.update(task_id, completed=min(92, current + 2))
                 for future in finished:
                     del future_map[future]
                 if future_map:
