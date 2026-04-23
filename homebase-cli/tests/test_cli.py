@@ -258,7 +258,7 @@ def test_package_install_remote_requests_install(monkeypatch) -> None:
         assert "requested ref: v0.1.1" in result.stdout
 
 
-def test_package_upgrade_uses_latest_github_version(monkeypatch) -> None:
+def test_package_update_uses_latest_github_version(monkeypatch) -> None:
     runner = CliRunner()
     monkeypatch.setattr(
         "homebase_cli.cli.latest_github_version",
@@ -271,12 +271,12 @@ def test_package_upgrade_uses_latest_github_version(monkeypatch) -> None:
             SimpleNamespace(installed_version="0.1.2", requested_ref=ref, resolved_ref="def456"),
         ),
     )
-    result = runner.invoke(app, ["package", "upgrade"])
+    result = runner.invoke(app, ["package", "update"])
     assert result.exit_code == 0
     assert "Selected latest target: v0.1.2" in result.stdout
 
 
-def test_package_upgrade_remote_requests_upgrade(monkeypatch) -> None:
+def test_package_update_remote_requests_update(monkeypatch) -> None:
     runner = CliRunner()
     monkeypatch.setattr(
         "homebase_cli.cli.latest_github_version",
@@ -296,28 +296,10 @@ def test_package_upgrade_remote_requests_upgrade(monkeypatch) -> None:
     )
     with runner.isolated_filesystem():
         Path("settings.toml").write_text('role = "control"\nroles = ["control", "client"]\n', encoding="utf-8")
-        result = runner.invoke(app, ["package", "upgrade", "host.app"], env={"HOMEBASE_SETTINGS_PATH": "settings.toml"})
+        result = runner.invoke(app, ["package", "update", "host.app"], env={"HOMEBASE_SETTINGS_PATH": "settings.toml"})
         assert result.exit_code == 0
-        assert "Remote upgrade completed: host.app" in result.stdout
+        assert "Remote update completed: host.app" in result.stdout
         assert "requested ref: v0.1.2" in result.stdout
-
-
-def test_package_update_alias_calls_upgrade(monkeypatch) -> None:
-    runner = CliRunner()
-    monkeypatch.setattr(
-        "homebase_cli.cli.latest_github_version",
-        lambda repo_url, include_prerelease=False: SimpleNamespace(ref="v0.1.2", version="v0.1.2", summary="latest note"),
-    )
-    monkeypatch.setattr(
-        "homebase_cli.cli.install_github_ref",
-        lambda ref, repo_url, python_bin=None, summary=None, on_tick=None: (
-            SimpleNamespace(returncode=0, stdout="installed\n", stderr="", log_path=Path("/tmp/install.log")),
-            SimpleNamespace(installed_version="0.1.2", requested_ref=ref, resolved_ref="def456"),
-        ),
-    )
-    result = runner.invoke(app, ["package", "update"])
-    assert result.exit_code == 0
-    assert "Selected latest target: v0.1.2" in result.stdout
 
 
 def test_client_commands_require_client_role() -> None:

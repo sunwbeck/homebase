@@ -65,9 +65,9 @@ install_target="git+${repo_url}@${git_ref}#subdirectory=${subdirectory}"
 
 if [[ -n "${VIRTUAL_ENV:-}" ]]; then
   install_python="${python_bin}"
-  echo "Installing homebase into active venv ${VIRTUAL_ENV} from ${repo_url}@${git_ref}"
+  echo "Using the current Python environment"
 else
-  echo "Creating or reusing managed venv at ${managed_venv}"
+  echo "Preparing homebase runtime"
   "${python_bin}" -m venv "${managed_venv}"
   install_python="${managed_venv}/bin/python"
   mkdir -p "${HOME}/.local/bin"

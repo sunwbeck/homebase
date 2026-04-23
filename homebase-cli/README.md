@@ -35,7 +35,7 @@ homebase node scan
 homebase node add
 homebase package status host.app
 homebase package install host.app --ref v0.1.1
-homebase package upgrade host.app
+homebase package update host.app
 ```
 
 Local package management:
@@ -44,7 +44,6 @@ Local package management:
 homebase package versions
 homebase package status
 homebase package install --ref main
-homebase package upgrade
 homebase package update
 ```
 

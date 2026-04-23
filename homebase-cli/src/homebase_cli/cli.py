@@ -56,7 +56,7 @@ ansible_app = typer.Typer(help="Generate inventory and run small ansible actions
 client_app = typer.Typer(help="Run the homebase client identity endpoint on one node.")
 package_app = typer.Typer(
     invoke_without_command=True,
-    help="Inspect GitHub versions and install or upgrade homebase from GitHub refs.",
+    help="Inspect GitHub versions and install or update homebase from GitHub refs.",
 )
 dev_app = typer.Typer(help="Run local development validation commands.")
 app.add_typer(node_app, name="node")
@@ -670,14 +670,14 @@ def package_install_command(
     _run_install_flow(ref=selected_ref, repo_url=repo_url, python_bin=python_bin, summary=selected_summary)
 
 
-@package_app.command("upgrade")
-def package_upgrade_command(
+@package_app.command("update")
+def package_update_command(
     resource: str | None = typer.Argument(None, help="Optional resource path."),
     repo_url: str = typer.Option(DEFAULT_REPO_URL, "--repo", help="GitHub repository URL."),
     python_bin: str | None = typer.Option(None, "--python", help="Explicit Python executable to install into. Defaults to the current Python environment."),
     include_prerelease: bool = typer.Option(False, "--pre-release", help="Allow prerelease versions when selecting the latest target."),
 ) -> None:
-    """Upgrade to the latest GitHub release, or default branch when no release exists."""
+    """Update to the latest GitHub release, or default branch when no release exists."""
     try:
         latest = latest_github_version(repo_url, include_prerelease=include_prerelease)
     except RuntimeError as exc:
@@ -697,7 +697,7 @@ def package_upgrade_command(
         ) as progress:
             task = progress.add_task(f"1/2 Resolve remote target: {resource}", total=100)
             progress.update(task, completed=100)
-            task = progress.add_task(f"2/2 Request upgrade on {resource}", total=100)
+            task = progress.add_task(f"2/2 Request update on {resource}", total=100)
             progress.update(task, completed=30)
             payload = request_package_upgrade(
                 node.address,
@@ -707,31 +707,15 @@ def package_upgrade_command(
             )
             progress.update(task, completed=100)
         if payload is None:
-            console.print(f"[red]Remote package upgrade failed.[/red] No response from {resource} at {node.address}:{port}")
+            console.print(f"[red]Remote package update failed.[/red] No response from {resource} at {node.address}:{port}")
             raise typer.Exit(code=1)
-        console.print(f"[green]Remote upgrade completed:[/green] {resource}")
+        console.print(f"[green]Remote update completed:[/green] {resource}")
         console.print(f"installed version: {payload.get('installed_version') or 'unknown'}")
         console.print(f"requested ref: {payload.get('requested_ref') or latest.ref}")
         if payload.get("resolved_ref"):
             console.print(f"resolved commit: {payload.get('resolved_ref')}")
         return
     _run_install_flow(ref=latest.ref, repo_url=repo_url, python_bin=python_bin, summary=latest.summary)
-
-
-@package_app.command("update")
-def package_update_command(
-    resource: str | None = typer.Argument(None, help="Optional resource path. Remote update is not implemented yet."),
-    repo_url: str = typer.Option(DEFAULT_REPO_URL, "--repo", help="GitHub repository URL."),
-    python_bin: str | None = typer.Option(None, "--python", help="Explicit Python executable to install into. Defaults to the current Python environment."),
-    include_prerelease: bool = typer.Option(False, "--pre-release", help="Allow prerelease versions when selecting the latest target."),
-) -> None:
-    """Alias for `hb package upgrade`."""
-    package_upgrade_command(
-        resource=resource,
-        repo_url=repo_url,
-        python_bin=python_bin,
-        include_prerelease=include_prerelease,
-    )
 
 
 @dev_app.command("self-test")
