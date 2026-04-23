@@ -77,11 +77,11 @@ from homebase_cli.settings import (
 
 
 app = typer.Typer(no_args_is_help=True, help="Manage homebase control and managed nodes.")
-connect_app = typer.Typer(help="Discover and register managed nodes.")
-node_app = typer.Typer(help="Inspect and manage registered nodes.")
-group_app = typer.Typer(help="Inspect and manage groups.")
-link_app = typer.Typer(help="Inspect and manage group-to-group links.")
-role_app = typer.Typer(help="Show or change the local role: control or managed.")
+connect_app = typer.Typer(invoke_without_command=True, help="Discover and register managed nodes.")
+node_app = typer.Typer(invoke_without_command=True, help="Inspect and manage registered nodes.")
+group_app = typer.Typer(invoke_without_command=True, help="Inspect and manage groups.")
+link_app = typer.Typer(invoke_without_command=True, help="Inspect and manage group-to-group links.")
+role_app = typer.Typer(invoke_without_command=True, help="Show or change the local role: control or managed.")
 ansible_app = typer.Typer(help="Run ansible-related helper commands.")
 client_app = typer.Typer(help="Run the homebase client service on one managed node.")
 inventory_app = typer.Typer(invoke_without_command=True, help="Show or open the ansible inventory YAML.")
@@ -93,6 +93,14 @@ package_app = typer.Typer(
 dev_app = typer.Typer(help="Development and internal commands.")
 console = Console()
 DEFAULT_KIND_CHOICES = ("control", "workstation", "host", "vm", "node")
+
+
+def _show_group_help(ctx: typer.Context) -> None:
+    """Show help instead of a missing-command error for command groups."""
+    if ctx.invoked_subcommand is not None:
+        return
+    console.print(ctx.get_help())
+    raise typer.Exit(code=0)
 
 
 def _match_registered_nodes(scan_address: str, scan_node_id: str | None) -> str:
@@ -292,6 +300,36 @@ def inventory_callback(ctx: typer.Context) -> None:
     console.print(f"[green]Inventory YAML:[/green] {target}")
     console.print(target.read_text(encoding="utf-8"))
     raise typer.Exit(code=0)
+
+
+@connect_app.callback()
+def connect_callback(ctx: typer.Context) -> None:
+    """Show help when connect is called without a subcommand."""
+    _show_group_help(ctx)
+
+
+@role_app.callback()
+def role_callback(ctx: typer.Context) -> None:
+    """Show help when role is called without a subcommand."""
+    _show_group_help(ctx)
+
+
+@node_app.callback()
+def node_callback(ctx: typer.Context) -> None:
+    """Show help when node is called without a subcommand."""
+    _show_group_help(ctx)
+
+
+@group_app.callback()
+def group_callback(ctx: typer.Context) -> None:
+    """Show help when group is called without a subcommand."""
+    _show_group_help(ctx)
+
+
+@link_app.callback()
+def link_callback(ctx: typer.Context) -> None:
+    """Show help when link is called without a subcommand."""
+    _show_group_help(ctx)
 
 
 @state_app.callback()
@@ -1247,7 +1285,8 @@ def _build_client_app() -> typer.Typer:
 
 
 def _build_node_app() -> typer.Typer:
-    runtime_node_app = typer.Typer(help="Inspect and manage registered nodes.")
+    runtime_node_app = typer.Typer(invoke_without_command=True, help="Inspect and manage registered nodes.")
+    runtime_node_app.callback()(node_callback)
     runtime_node_app.command("list")(node_list_command)
     runtime_node_app.command("show")(node_show_command)
     runtime_node_app.command("edit")(node_edit_command)
@@ -1257,14 +1296,16 @@ def _build_node_app() -> typer.Typer:
 
 
 def _build_connect_app() -> typer.Typer:
-    runtime_connect_app = typer.Typer(help="Discover and register managed nodes.")
+    runtime_connect_app = typer.Typer(invoke_without_command=True, help="Discover and register managed nodes.")
+    runtime_connect_app.callback()(connect_callback)
     runtime_connect_app.command("scan")(node_scan_command)
     runtime_connect_app.command("add")(node_add_command)
     return runtime_connect_app
 
 
 def _build_group_app() -> typer.Typer:
-    runtime_group_app = typer.Typer(help="Inspect and manage groups.")
+    runtime_group_app = typer.Typer(invoke_without_command=True, help="Inspect and manage groups.")
+    runtime_group_app.callback()(group_callback)
     runtime_group_app.command("list")(group_list_command)
     runtime_group_app.command("show")(group_show_command)
     runtime_group_app.command("add")(group_add_command)
@@ -1274,7 +1315,8 @@ def _build_group_app() -> typer.Typer:
 
 
 def _build_link_app() -> typer.Typer:
-    runtime_link_app = typer.Typer(help="Inspect and manage group-to-group links.")
+    runtime_link_app = typer.Typer(invoke_without_command=True, help="Inspect and manage group-to-group links.")
+    runtime_link_app.callback()(link_callback)
     runtime_link_app.command("list")(link_list_command)
     runtime_link_app.command("add")(link_add_command)
     runtime_link_app.command("remove")(link_remove_command)
@@ -1282,7 +1324,8 @@ def _build_link_app() -> typer.Typer:
 
 
 def _build_role_app() -> typer.Typer:
-    runtime_role_app = typer.Typer(help="Show or change the local role: control or managed.")
+    runtime_role_app = typer.Typer(invoke_without_command=True, help="Show or change the local role: control or managed.")
+    runtime_role_app.callback()(role_callback)
     runtime_role_app.command("show")(role_show_command)
     runtime_role_app.command("edit")(role_edit_command)
     return runtime_role_app
