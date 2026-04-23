@@ -33,7 +33,6 @@ class Node:
     services: tuple[str, ...] = ()
     exposed_endpoints: tuple[tuple[int, str, str | None], ...] = ()
     role_groups: tuple[str, ...] = ()
-    states: tuple[tuple[str, str], ...] = ()
 
     @property
     def depth(self) -> int:
@@ -119,11 +118,6 @@ def load_nodes(path: Path | None = None) -> tuple[Node, ...]:
                 services=tuple(str(service) for service in values.get("services", [])),
                 exposed_endpoints=tuple(sorted(exposed_entries, key=lambda item: item[0])),
                 role_groups=tuple(str(name) for name in values.get("role_groups", [])),
-                states=tuple(
-                    (str(key).strip(), str(value).strip())
-                    for key, value in dict(values.get("states", {})).items()
-                    if str(key).strip() and str(value).strip()
-                ),
             )
         )
     return tuple(sorted(nodes, key=lambda item: item.name))
@@ -193,11 +187,6 @@ def _save_registry(nodes: tuple[Node, ...], role_groups: tuple[RoleGroup, ...], 
         if node.role_groups:
             group_values = ", ".join(f'"{group}"' for group in node.role_groups)
             lines.append(f"role_groups = [{group_values}]")
-        if node.states:
-            lines.append("[nodes.states]")
-            for key, value in node.states:
-                escaped_value = value.replace("\\", "\\\\").replace('"', '\\"')
-                lines.append(f'"{key}" = "{escaped_value}"')
         lines.append("")
     for group in role_groups:
         lines.append("[[role_groups]]")
@@ -283,7 +272,6 @@ def add_node(
         services=tuple(services),
         exposed_endpoints=tuple(sorted(exposed_endpoints, key=lambda item: item[0])),
         role_groups=(),
-        states=(),
     )
     save_nodes(existing_nodes + (node,), path=path)
     return node
@@ -321,7 +309,6 @@ def rename_node(name: str, new_name: str, path: Path | None = None) -> Node:
                 services=node.services,
                 exposed_endpoints=node.exposed_endpoints,
                 role_groups=node.role_groups,
-                states=node.states,
             )
             updated_nodes.append(renamed)
             continue
@@ -342,7 +329,6 @@ def rename_node(name: str, new_name: str, path: Path | None = None) -> Node:
                 services=node.services,
                 exposed_endpoints=node.exposed_endpoints,
                 role_groups=node.role_groups,
-                states=node.states,
             )
         )
     save_nodes(tuple(updated_nodes), path)
@@ -376,8 +362,8 @@ def remove_node(name: str, path: Path | None = None) -> Node:
                 client_port=node.client_port,
                 open_ports=node.open_ports,
                 services=node.services,
+                exposed_endpoints=node.exposed_endpoints,
                 role_groups=node.role_groups,
-                states=node.states,
             )
         )
     save_nodes(tuple(updated_nodes), path)
@@ -414,7 +400,6 @@ def set_node_runtime_role(name: str, runtime_role: str, path: Path | None = None
             services=node.services,
             exposed_endpoints=node.exposed_endpoints,
             role_groups=node.role_groups,
-            states=node.states,
         )
         updated_nodes.append(updated)
     save_nodes(tuple(updated_nodes), path)
@@ -451,7 +436,6 @@ def set_node_description(name: str, description: str, path: Path | None = None) 
             services=node.services,
             exposed_endpoints=node.exposed_endpoints,
             role_groups=node.role_groups,
-            states=node.states,
         )
         updated_nodes.append(updated)
     save_nodes(tuple(updated_nodes), path)
@@ -521,7 +505,6 @@ def ensure_local_node(
             services=tuple(services) if services else node.services,
             exposed_endpoints=tuple(sorted(exposed_endpoints, key=lambda item: item[0])) if exposed_endpoints else node.exposed_endpoints,
             role_groups=node.role_groups,
-            states=node.states,
         )
         updated_nodes.append(updated)
     save_nodes(tuple(updated_nodes), path)
@@ -577,7 +560,6 @@ def remove_role_group(name: str, path: Path | None = None) -> None:
             services=node.services,
             exposed_endpoints=node.exposed_endpoints,
             role_groups=tuple(item for item in node.role_groups if item != normalized_name),
-            states=node.states,
         )
         for node in load_nodes(path)
     )
@@ -622,7 +604,6 @@ def rename_role_group(name: str, new_name: str, path: Path | None = None) -> Rol
             services=node.services,
             exposed_endpoints=node.exposed_endpoints,
             role_groups=tuple(normalized_new_name if item == normalized_name else item for item in node.role_groups),
-            states=node.states,
         )
         for node in load_nodes(path)
     )
@@ -725,7 +706,6 @@ def assign_node_role_group(node_name: str, group_name: str, path: Path | None = 
         services=node.services,
         exposed_endpoints=node.exposed_endpoints,
         role_groups=node.role_groups + (group_name,),
-        states=node.states,
     )
     nodes = tuple(updated if item.name == node_name else item for item in load_nodes(path))
     save_nodes(nodes, path)
@@ -753,71 +733,6 @@ def unassign_node_role_group(node_name: str, group_name: str, path: Path | None 
         services=node.services,
         exposed_endpoints=node.exposed_endpoints,
         role_groups=tuple(item for item in node.role_groups if item != group_name),
-        states=node.states,
-    )
-    nodes = tuple(updated if item.name == node_name else item for item in load_nodes(path))
-    save_nodes(nodes, path)
-    return updated
-
-
-def set_node_state(node_name: str, key: str, value: str, path: Path | None = None) -> Node:
-    """Set one state value on one node."""
-    node = find_node(node_name, path)
-    if node is None:
-        raise ValueError(f"unknown node: {node_name}")
-    normalized_key = key.strip()
-    normalized_value = value.strip()
-    if not normalized_key or not normalized_value:
-        raise ValueError("state key and value cannot be empty")
-    states = dict(node.states)
-    states[normalized_key] = normalized_value
-    updated = Node(
-        name=node.name,
-        parent=node.parent,
-        kind=node.kind,
-        runtime_role=node.runtime_role,
-        address=node.address,
-        ssh_user=node.ssh_user,
-        description=node.description,
-        runtime_hostname=node.runtime_hostname,
-        node_id=node.node_id,
-        platform=node.platform,
-        client_port=node.client_port,
-        open_ports=node.open_ports,
-        services=node.services,
-        exposed_endpoints=node.exposed_endpoints,
-        role_groups=node.role_groups,
-        states=tuple(states.items()),
-    )
-    nodes = tuple(updated if item.name == node_name else item for item in load_nodes(path))
-    save_nodes(nodes, path)
-    return updated
-
-
-def unset_node_state(node_name: str, key: str, path: Path | None = None) -> Node:
-    """Remove one state value from one node."""
-    node = find_node(node_name, path)
-    if node is None:
-        raise ValueError(f"unknown node: {node_name}")
-    states = dict(node.states)
-    states.pop(key.strip(), None)
-    updated = Node(
-        name=node.name,
-        parent=node.parent,
-        kind=node.kind,
-        runtime_role=node.runtime_role,
-        address=node.address,
-        ssh_user=node.ssh_user,
-        description=node.description,
-        runtime_hostname=node.runtime_hostname,
-        node_id=node.node_id,
-        platform=node.platform,
-        client_port=node.client_port,
-        open_ports=node.open_ports,
-        services=node.services,
-        exposed_endpoints=node.exposed_endpoints,
-        role_groups=node.role_groups,
-        states=tuple(states.items()),
     )
     nodes = tuple(updated if item.name == node_name else item for item in load_nodes(path))
     save_nodes(nodes, path)

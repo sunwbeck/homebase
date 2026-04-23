@@ -10,7 +10,6 @@ from homebase_cli.registry import (
     ensure_local_node,
     rename_node,
     set_node_runtime_role,
-    set_node_state,
 )
 
 
@@ -48,7 +47,7 @@ def test_add_node_rejects_unknown_parent(tmp_path: Path) -> None:
         raise AssertionError("expected add_node to reject unknown parent")
 
 
-def test_role_groups_and_node_state_persist_in_registry(tmp_path: Path) -> None:
+def test_role_groups_persist_in_registry(tmp_path: Path) -> None:
     path = tmp_path / "nodes.toml"
     add_node(name="host", kind="host", path=path)
     add_node(name="host.app", parent="host", kind="vm", path=path)
@@ -56,14 +55,12 @@ def test_role_groups_and_node_state_persist_in_registry(tmp_path: Path) -> None:
     add_role_group(name="app-tier", path=path)
     link_role_group("host-node", "app-tier", path=path)
     assign_node_role_group("host.app", "app-tier", path=path)
-    set_node_state("host.app", "status", "active", path=path)
     groups = load_role_groups(path)
     nodes = load_nodes(path)
     assert groups[0].name == "app-tier"
     assert groups[1].members == ("app-tier",)
     app_node = next(node for node in nodes if node.name == "host.app")
     assert app_node.role_groups == ("app-tier",)
-    assert dict(app_node.states) == {"status": "active"}
 
 
 def test_rename_and_runtime_role_update_persist_in_registry(tmp_path: Path) -> None:

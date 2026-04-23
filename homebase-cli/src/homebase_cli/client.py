@@ -33,20 +33,6 @@ PACKAGE_UPGRADE_PATH = "/package/upgrade"
 CLIENT_STATE_PATH = Path.home() / ".config" / "homebase" / "client-state.json"
 CONNECT_RUNTIME_PATH = LOCAL_CLI_ROOT / "run" / "connect-server.json"
 CONNECT_LOG_PATH = LOCAL_CLI_ROOT / "logs" / "connect-server.log"
-KNOWN_PORT_PURPOSES = {
-    22: "ssh",
-    53: "dns",
-    80: "http",
-    111: "rpcbind",
-    139: "netbios",
-    443: "https",
-    445: "smb",
-    2049: "nfs",
-    3000: "grafana",
-    32400: "plex",
-    8428: "homebase",
-    9090: "prometheus",
-}
 
 
 @dataclass(frozen=True)
@@ -270,10 +256,7 @@ def detect_open_ports() -> tuple[int, ...]:
 
 
 def describe_port(port: int, owner: str | None = None) -> str:
-    """Return one short human-friendly purpose label for a port."""
-    known = KNOWN_PORT_PURPOSES.get(port)
-    if known:
-        return known
+    """Return one generic label for a listening port without hardcoded service names."""
     normalized_owner = (owner or "").strip()
     if normalized_owner.endswith(".service"):
         normalized_owner = normalized_owner.removesuffix(".service")
