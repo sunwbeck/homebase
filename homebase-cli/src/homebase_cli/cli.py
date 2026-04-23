@@ -1064,11 +1064,24 @@ def role_list_command() -> None:
 
 @role_app.command("edit")
 def role_edit_command(
-    target_or_role: str = typer.Argument(..., help="Local role value, or a node name when editing a registered node."),
-    runtime_role: str | None = typer.Argument(None, help="New role for the selected registered node."),
+    target_or_role: str | None = typer.Argument(None, help="Optional local role value, or a node name when editing a registered node."),
+    runtime_role: str | None = typer.Argument(None, help="Optional new role for the selected registered node."),
 ) -> None:
     """Edit the local runtime role, or the role of one registered node."""
+    if target_or_role is None:
+        _set_local_role(_choose_runtime_role())
+        return
     if runtime_role is None:
+        if _current_runtime_role() == "controller":
+            node = find_node(target_or_role)
+            if node is not None:
+                selected_role = _choose_runtime_role()
+                try:
+                    updated = set_node_runtime_role(target_or_role, selected_role)
+                except ValueError as exc:
+                    raise typer.BadParameter(str(exc)) from exc
+                console.print(f"[green]Set node role:[/green] {updated.name} -> {updated.runtime_role}")
+                return
         _set_local_role(target_or_role)
         return
     _require_role("controller")

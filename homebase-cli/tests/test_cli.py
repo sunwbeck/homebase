@@ -121,6 +121,32 @@ def test_init_sets_controller_role(monkeypatch) -> None:
         assert "Registered local node name: control" in result.stdout
 
 
+def test_role_edit_without_args_prompts_for_local_role(monkeypatch) -> None:
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        env = {"HOMEBASE_SETTINGS_PATH": "settings.toml"}
+        Path("settings.toml").write_text('role = "managed"\nnode_name = "app"\n', encoding="utf-8")
+        app = load_app(monkeypatch, "settings.toml")
+        monkeypatch.setattr("homebase_cli.cli._pick_from_list", lambda label, options: "controller")
+        result = runner.invoke(app, ["role", "edit"], env=env)
+        assert result.exit_code == 0
+        assert "Set local node type to controller" in result.stdout
+
+
+def test_role_edit_node_without_role_prompts_for_node_role(monkeypatch) -> None:
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        env = {"HOMEBASE_SETTINGS_PATH": "settings.toml", "HOMEBASE_REGISTRY_PATH": "nodes.toml"}
+        Path("settings.toml").write_text('role = "controller"\nnode_name = "control"\n', encoding="utf-8")
+        Path("nodes.toml").write_text('[[nodes]]\nname = "host.app"\nkind = "vm"\nruntime_role = "managed"\n', encoding="utf-8")
+        app = load_app(monkeypatch, "settings.toml")
+        monkeypatch.setattr("homebase_cli.cli._pick_from_list", lambda label, options: "controller")
+        result = runner.invoke(app, ["role", "edit", "host.app"], env=env)
+        assert result.exit_code == 0
+        assert "Set node role:" in result.stdout
+        assert "host.app -> controller" in result.stdout
+
+
 def test_init_rejects_unknown_role(monkeypatch) -> None:
     runner = CliRunner()
     with runner.isolated_filesystem():
