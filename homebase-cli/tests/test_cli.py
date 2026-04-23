@@ -106,8 +106,7 @@ def test_init_adds_unknown_role_when_given_directly() -> None:
     with runner.isolated_filesystem():
         result = runner.invoke(app, ["init", "--role", "builder"], env={"HOMEBASE_SETTINGS_PATH": "settings.toml"})
         assert result.exit_code == 0
-        roles_result = runner.invoke(app, ["roles"], env={"HOMEBASE_SETTINGS_PATH": "settings.toml"})
-        assert "builder" in roles_result.stdout
+        assert 'role = "builder"' in Path("settings.toml").read_text(encoding="utf-8")
 
 
 def test_init_interactive_can_add_role() -> None:
@@ -123,21 +122,39 @@ def test_init_interactive_can_add_role() -> None:
         assert "Set local role to builder" in result.stdout
 
 
-def test_role_command_prints_current_role() -> None:
+def test_role_templates_command_lists_skeletons() -> None:
     runner = CliRunner()
-    with runner.isolated_filesystem():
-        Path("settings.toml").write_text('role = "client"\n', encoding="utf-8")
-        result = runner.invoke(app, ["role"], env={"HOMEBASE_SETTINGS_PATH": "settings.toml"})
-        assert result.exit_code == 0
-        assert "client" in result.stdout
+    result = runner.invoke(app, ["role", "templates"])
+    assert result.exit_code == 0
+    assert "host" in result.stdout
+    assert "fleet" in result.stdout
 
 
-def test_roles_command_adds_role() -> None:
+def test_role_group_commands_build_hierarchy() -> None:
     runner = CliRunner()
     with runner.isolated_filesystem():
-        result = runner.invoke(app, ["roles", "--add", "builder"], env={"HOMEBASE_SETTINGS_PATH": "settings.toml"})
-        assert result.exit_code == 0
-        assert "builder" in result.stdout
+        env = {"HOMEBASE_SETTINGS_PATH": "settings.toml"}
+        assert runner.invoke(app, ["role", "add", "host-node", "--template", "host"], env=env).exit_code == 0
+        assert runner.invoke(app, ["role", "add", "app-vm", "--template", "node"], env=env).exit_code == 0
+        assert runner.invoke(app, ["role", "link", "host-node", "app-vm"], env=env).exit_code == 0
+        assert runner.invoke(app, ["role", "assign", "host-node"], env=env).exit_code == 0
+        status_result = runner.invoke(app, ["role", "status"], env=env)
+        assert status_result.exit_code == 0
+        assert "host-node" in status_result.stdout
+        assert "app-vm" in status_result.stdout
+
+
+def test_state_commands_store_values() -> None:
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        env = {"HOMEBASE_SETTINGS_PATH": "settings.toml"}
+        assert runner.invoke(app, ["state", "set", "site", "home"], env=env).exit_code == 0
+        assert runner.invoke(app, ["state", "set", "status", "active"], env=env).exit_code == 0
+        show_result = runner.invoke(app, ["state", "show"], env=env)
+        assert show_result.exit_code == 0
+        assert "site" in show_result.stdout
+        assert "active" in show_result.stdout
+        assert runner.invoke(app, ["state", "unset", "status"], env=env).exit_code == 0
 
 
 def test_package_versions_prints_github_versions(monkeypatch) -> None:
@@ -321,11 +338,11 @@ def test_root_help_uses_workflow_order() -> None:
     result = runner.invoke(app, ["--help"])
     assert result.exit_code == 0
     output = result.stdout
-    command_lines = [line for line in output.splitlines() if line.strip().startswith(("│ init", "│ role", "│ roles", "│ client", "│ node", "│ package", "│ dev"))]
+    command_lines = [line for line in output.splitlines() if line.strip().startswith(("│ init", "│ role", "│ state", "│ client", "│ node", "│ package", "│ dev"))]
     assert command_lines == [
         "│ init      Initialize the local node role for this homebase installation.     │",
-        "│ role      Show or update the local node role.                                │",
-        "│ roles     List, add, or remove selectable local roles.                       │",
+        "│ role      Define local role groups and current-node memberships.             │",
+        "│ state     Store and inspect current-node state values.                       │",
         "│ client    Run the homebase client service on one managed node.               │",
         "│ node      Scan for clients and inspect registered nodes.                     │",
         "│ package   Check installed homebase revisions and install or update from      │",
@@ -376,6 +393,28 @@ def test_node_help_uses_registry_workflow_order() -> None:
         "│ ls       List top-level or child resources.                                  │",
         "│ info     Show high-level information for a resource.                         │",
     ]
+
+
+def test_role_help_uses_group_management_workflow() -> None:
+    runner = CliRunner()
+    result = runner.invoke(app, ["role", "--help"])
+    assert result.exit_code == 0
+    output = result.stdout
+    assert "templates" in output
+    assert "list" in output
+    assert "add" in output
+    assert "link" in output
+    assert "assign" in output
+
+
+def test_state_help_uses_simple_state_commands() -> None:
+    runner = CliRunner()
+    result = runner.invoke(app, ["state", "--help"])
+    assert result.exit_code == 0
+    output = result.stdout
+    assert "show" in output
+    assert "set" in output
+    assert "unset" in output
 
 
 def test_client_commands_require_client_role() -> None:

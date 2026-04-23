@@ -47,13 +47,32 @@ from homebase_cli.scanner import (
     unregistered_discovered_nodes,
 )
 from homebase_cli.selftest import run_client_self_test
-from homebase_cli.settings import add_role, list_roles, load_settings, remove_role, set_role
+from homebase_cli.settings import (
+    add_group,
+    add_role,
+    assign_group,
+    link_group,
+    list_group_memberships,
+    list_groups,
+    list_roles,
+    list_states,
+    load_settings,
+    remove_group,
+    role_templates,
+    set_role,
+    set_state_value,
+    unlink_group,
+    unassign_group,
+    unset_state_value,
+)
 
 
 app = typer.Typer(no_args_is_help=True, help="Manage homebase control and client nodes.")
 node_app = typer.Typer(help="Scan for clients and inspect registered nodes.")
 ansible_app = typer.Typer(help="Run ansible-related helper commands.")
 client_app = typer.Typer(help="Run the homebase client service on one managed node.")
+role_app = typer.Typer(invoke_without_command=True, help="Define local role groups and current-node memberships.")
+state_app = typer.Typer(invoke_without_command=True, help="Store and inspect current-node state values.")
 package_app = typer.Typer(
     invoke_without_command=True,
     help="Check installed homebase revisions and install or update from GitHub.",
@@ -124,6 +143,51 @@ def _choose_or_add_role() -> str:
         add_role(new_role)
         return new_role
     return selected
+
+
+def _group_index() -> dict[str, object]:
+    return {group.name: group for group in list_groups()}
+
+
+def _group_roots() -> list[str]:
+    groups = list_groups()
+    child_names = {member for group in groups for member in group.members}
+    roots = [group.name for group in groups if group.name not in child_names]
+    return sorted(roots)
+
+
+def _render_group_tree(name: str, index: dict[str, object], rows: list[tuple[str, str]], depth: int = 0, seen: set[str] | None = None) -> None:
+    if seen is None:
+        seen = set()
+    if name in seen:
+        rows.append((f'{"  " * depth}{name}', "cycle"))
+        return
+    seen.add(name)
+    group = index.get(name)
+    if group is None:
+        rows.append((f'{"  " * depth}{name}', "missing"))
+        return
+    rows.append((f'{"  " * depth}{group.name}', group.template))
+    for member in group.members:
+        _render_group_tree(member, index, rows, depth + 1, seen.copy())
+
+
+@role_app.callback()
+def role_callback(ctx: typer.Context) -> None:
+    """Show standard help when role is called without a subcommand."""
+    if ctx.invoked_subcommand is not None:
+        return
+    console.print(ctx.get_help())
+    raise typer.Exit(code=0)
+
+
+@state_app.callback()
+def state_callback(ctx: typer.Context) -> None:
+    """Show standard help when state is called without a subcommand."""
+    if ctx.invoked_subcommand is not None:
+        return
+    console.print(ctx.get_help())
+    raise typer.Exit(code=0)
 
 
 @package_app.callback()
@@ -443,44 +507,165 @@ def init_command(
     console.print(f"[green]Set local role to {updated.role}[/green]")
 
 
-@app.command("role")
-def role_command(
-    value: str | None = typer.Argument(None, help="Optional new role: control or client."),
-) -> None:
-    """Show or update the local node role."""
-    if value is None:
-        current = load_settings().role
-        console.print(current or "unconfigured")
+@role_app.command("status")
+def role_status_command() -> None:
+    """Show local role-group memberships and the saved group tree."""
+    settings = load_settings()
+    memberships = settings.group_memberships
+    console.print("[bold]Current role groups[/bold]")
+    if memberships:
+        console.print("assigned:")
+        for name in memberships:
+            console.print(f"- {name}")
+    else:
+        console.print("assigned: none")
+    groups = list_groups()
+    if not groups:
+        console.print("defined groups: none")
         return
-    selected = value.strip().lower()
-    if selected not in list_roles():
-        add_role(selected)
-    updated = set_role(selected)
-    console.print(f"[green]Set local role to {updated.role}[/green]")
+    rows: list[tuple[str, str]] = []
+    index = _group_index()
+    for root_name in _group_roots():
+        _render_group_tree(root_name, index, rows)
+    if not rows:
+        rows = [(group.name, group.template) for group in groups]
+    console.print("group tree:")
+    print_node_tree(rows)
 
 
-@app.command("roles")
-def roles_command(
-    add: str | None = typer.Option(None, "--add", help="Add one selectable role."),
-    remove: str | None = typer.Option(None, "--remove", help="Remove one selectable role."),
+@role_app.command("templates")
+def role_templates_command() -> None:
+    """Show built-in role-group skeletons."""
+    table = Table(show_header=True, header_style="bold")
+    table.add_column("Template")
+    table.add_column("Purpose")
+    for name, summary in role_templates():
+        table.add_row(name, summary)
+    console.print(table)
+
+
+@role_app.command("list")
+def role_list_command() -> None:
+    """List defined role groups."""
+    groups = list_groups()
+    if not groups:
+        console.print("[yellow]No role groups defined yet.[/yellow]")
+        return
+    table = Table(show_header=True, header_style="bold")
+    table.add_column("Name")
+    table.add_column("Template")
+    table.add_column("Members")
+    table.add_column("Description")
+    for group in groups:
+        table.add_row(
+            group.name,
+            group.template,
+            ", ".join(group.members) if group.members else "",
+            group.description or "",
+        )
+    console.print(table)
+
+
+@role_app.command("add")
+def role_add_command(
+    name: str = typer.Argument(..., help="Group name such as host-node or client-group."),
+    template: str = typer.Option("custom", "--template", help="Skeleton template such as node, host, group, fleet, or service."),
+    description: str = typer.Option("", "--description", help="Short description."),
 ) -> None:
-    """List, add, or remove selectable local roles."""
-    if add and remove:
-        raise typer.BadParameter("use only one of --add or --remove at a time")
-    if add is not None:
-        updated = add_role(add)
-        console.print(f"[green]Added role:[/green] {add.strip().lower()}")
-        for item in updated.roles:
-            console.print(item)
+    """Add one local role group."""
+    try:
+        add_group(name, template=template, description=description or None)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    console.print(f"[green]Added role group:[/green] {name.strip().lower()}")
+
+
+@role_app.command("remove")
+def role_remove_command(name: str = typer.Argument(..., help="Group name.")) -> None:
+    """Remove one local role group."""
+    try:
+        remove_group(name)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    console.print(f"[green]Removed role group:[/green] {name.strip().lower()}")
+
+
+@role_app.command("link")
+def role_link_command(
+    parent: str = typer.Argument(..., help="Parent group name."),
+    child: str = typer.Argument(..., help="Child group name."),
+) -> None:
+    """Link one child group under one parent group."""
+    try:
+        link_group(parent, child)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    console.print(f"[green]Linked group:[/green] {child.strip().lower()} -> {parent.strip().lower()}")
+
+
+@role_app.command("unlink")
+def role_unlink_command(
+    parent: str = typer.Argument(..., help="Parent group name."),
+    child: str = typer.Argument(..., help="Child group name."),
+) -> None:
+    """Remove one child group link from one parent group."""
+    try:
+        unlink_group(parent, child)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    console.print(f"[green]Unlinked group:[/green] {child.strip().lower()} from {parent.strip().lower()}")
+
+
+@role_app.command("assign")
+def role_assign_command(name: str = typer.Argument(..., help="Group name.")) -> None:
+    """Assign the current node to one role group."""
+    try:
+        assign_group(name)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    console.print(f"[green]Assigned current node to:[/green] {name.strip().lower()}")
+
+
+@role_app.command("unassign")
+def role_unassign_command(name: str = typer.Argument(..., help="Group name.")) -> None:
+    """Remove one role-group assignment from the current node."""
+    unassign_group(name)
+    console.print(f"[green]Removed current-node assignment:[/green] {name.strip().lower()}")
+
+
+@state_app.command("show")
+def state_show_command() -> None:
+    """Show current-node state values."""
+    states = list_states()
+    if not states:
+        console.print("[yellow]No state values saved yet.[/yellow]")
         return
-    if remove is not None:
-        updated = remove_role(remove)
-        console.print(f"[green]Removed role:[/green] {remove.strip().lower()}")
-        for item in updated.roles:
-            console.print(item)
-        return
-    for item in list_roles():
-        console.print(item)
+    table = Table(show_header=True, header_style="bold")
+    table.add_column("Key")
+    table.add_column("Value")
+    for key, value in states:
+        table.add_row(key, value)
+    console.print(table)
+
+
+@state_app.command("set")
+def state_set_command(
+    key: str = typer.Argument(..., help="State key."),
+    value: str = typer.Argument(..., help="State value."),
+) -> None:
+    """Set one current-node state value."""
+    try:
+        set_state_value(key, value)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    console.print(f"[green]Set state:[/green] {key}={value}")
+
+
+@state_app.command("unset")
+def state_unset_command(key: str = typer.Argument(..., help="State key.")) -> None:
+    """Remove one current-node state value."""
+    unset_state_value(key)
+    console.print(f"[green]Removed state:[/green] {key}")
 
 
 @package_app.command("status")
@@ -778,8 +963,8 @@ def _build_dev_app() -> typer.Typer:
 def _build_root_app() -> typer.Typer:
     runtime_app = typer.Typer(no_args_is_help=True, help="Manage homebase control and client nodes.")
     runtime_app.command("init")(init_command)
-    runtime_app.command("role")(role_command)
-    runtime_app.command("roles")(roles_command)
+    runtime_app.add_typer(role_app, name="role")
+    runtime_app.add_typer(state_app, name="state")
     runtime_app.add_typer(_build_client_app(), name="client")
     runtime_app.add_typer(_build_node_app(), name="node")
     runtime_app.add_typer(_build_package_app(), name="package")
