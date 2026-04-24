@@ -236,6 +236,7 @@ def test_schedule_windows_self_update_spawns_helper(tmp_path: Path, monkeypatch)
     monkeypatch.setattr("homebase_cli.packaging.platform.system", lambda: "Windows")
     monkeypatch.setattr("homebase_cli.packaging.Path.home", lambda: tmp_path)
     monkeypatch.setattr("homebase_cli.packaging.sys.executable", str(tmp_path / "venv" / "Scripts" / "python.exe"))
+    monkeypatch.setattr("homebase_cli.packaging.shutil.which", lambda name: r"C:\Windows\py.exe" if name == "py" else None)
     captured = {}
 
     class FakeProcess:
@@ -252,8 +253,8 @@ def test_schedule_windows_self_update_spawns_helper(tmp_path: Path, monkeypatch)
     assert result_path.name.endswith(".json")
     assert log_path.name.endswith(".log")
     assert result_path.exists()
-    assert captured["args"][0] == str(tmp_path / "venv" / "Scripts" / "python.exe")
-    helper_script = Path(captured["args"][1])
+    assert captured["args"][:2] == [r"C:\Windows\py.exe", "-3"]
+    helper_script = Path(captured["args"][2])
     assert helper_script.exists()
     assert "install_github_ref" in helper_script.read_text(encoding="utf-8")
     result_payload = json.loads(result_path.read_text(encoding="utf-8"))

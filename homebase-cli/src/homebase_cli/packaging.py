@@ -133,6 +133,21 @@ def should_defer_windows_self_update(python_bin: str | None = None) -> bool:
     return _same_interpreter_path(interpreter, sys.executable)
 
 
+def _windows_helper_python_command(target_interpreter: str) -> list[str] | None:
+    """Return an external Python command that can run the Windows self-update helper."""
+    py_launcher = shutil.which("py")
+    if py_launcher is not None:
+        return [py_launcher, "-3"]
+    for candidate in ("python", "python3"):
+        resolved = shutil.which(candidate)
+        if resolved is None:
+            continue
+        if _same_interpreter_path(resolved, target_interpreter):
+            continue
+        return [resolved]
+    return None
+
+
 def schedule_windows_self_update(
     ref: str,
     *,
@@ -142,6 +157,9 @@ def schedule_windows_self_update(
 ) -> tuple[int, Path, Path]:
     """Schedule one Windows self-update in a helper process and return its PID, result path, and log path."""
     interpreter = python_bin if python_bin is not None else sys.executable
+    helper_command = _windows_helper_python_command(interpreter)
+    if helper_command is None:
+        raise RuntimeError("could not find an external Python interpreter for Windows self-update")
     helper_dir = Path.home() / ".local" / "share" / "homebase-cli" / "run"
     helper_dir.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
@@ -210,7 +228,7 @@ def schedule_windows_self_update(
     helper_path.write_text(helper_source, encoding="utf-8")
     log_handle = log_path.open("a", encoding="utf-8")
     process = subprocess.Popen(
-        [interpreter, str(helper_path)],
+        [*helper_command, str(helper_path)],
         stdout=log_handle,
         stderr=log_handle,
         stdin=subprocess.DEVNULL,

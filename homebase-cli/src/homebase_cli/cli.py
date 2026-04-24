@@ -2356,7 +2356,7 @@ def _run_install_flow(
         )
         local_name = _current_node_name() or "local"
         node_logs = {local_name: []}
-        stage_state = {local_name: (3, 6, f"waiting for helper pid {helper_pid}", "running")}
+        stage_state = {local_name: (1, 1, f"waiting for helper pid {helper_pid}", "running")}
         with Live(_render_package_panels(selected_nodes=[SimpleNamespace(name=local_name)], node_logs=node_logs, stage_state=stage_state), console=console, refresh_per_second=8) as live:
             def tick() -> None:
                 live.update(_render_package_panels(selected_nodes=[SimpleNamespace(name=local_name)], node_logs=node_logs, stage_state=stage_state), refresh=True)
