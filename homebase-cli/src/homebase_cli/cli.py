@@ -2347,16 +2347,17 @@ def _run_install_flow(
     summary: str | None,
 ) -> None:
     if should_defer_windows_self_update(python_bin):
-        helper_pid, result_path = schedule_windows_self_update(
+        helper_pid, result_path, log_path = schedule_windows_self_update(
             ref,
             repo_url=repo_url,
             python_bin=python_bin,
             summary=summary,
         )
-        console.print("[yellow]Windows local self-update was scheduled in the background.[/yellow]")
+        console.print("[yellow]Windows local self-update started in a background helper.[/yellow]")
         console.print(f"helper pid: {helper_pid}")
         console.print(f"result file: {result_path}")
-        console.print("Close this terminal and open a new one in a few seconds, then run `homebase package status`.")
+        console.print(f"log file: {log_path}")
+        console.print("Open a new terminal in a few seconds and check `homebase package status`.")
         return
     local_name = _current_node_name() or "local"
     node_logs = {local_name: []}
@@ -2463,7 +2464,7 @@ def package_install_command(
             is_local = bool(current_name and node.name == current_name)
             if is_local:
                 if should_defer_windows_self_update(python_bin):
-                    helper_pid, result_path = schedule_windows_self_update(
+                    helper_pid, result_path, log_path = schedule_windows_self_update(
                         selected_ref,
                         repo_url=repo_url,
                         python_bin=python_bin,
@@ -2476,7 +2477,7 @@ def package_install_command(
                             "resolved_ref": "",
                         },
                         "address": detect_primary_address() or "",
-                        "result": f"scheduled in background (pid {helper_pid}); result: {result_path}",
+                        "result": f"background helper pid {helper_pid}; result: {result_path}; log: {log_path}",
                     }
                 try:
                     _, status = install_github_ref(
@@ -2611,7 +2612,7 @@ def package_update_command(
             is_local = bool(current_name and node.name == current_name)
             if is_local:
                 if should_defer_windows_self_update(python_bin):
-                    helper_pid, result_path = schedule_windows_self_update(
+                    helper_pid, result_path, log_path = schedule_windows_self_update(
                         latest.ref,
                         repo_url=repo_url,
                         python_bin=python_bin,
@@ -2624,7 +2625,7 @@ def package_update_command(
                             "resolved_ref": "",
                         },
                         "address": detect_primary_address() or "",
-                        "result": f"scheduled in background (pid {helper_pid}); result: {result_path}",
+                        "result": f"background helper pid {helper_pid}; result: {result_path}; log: {log_path}",
                     }
                 try:
                     _, status = install_github_ref(

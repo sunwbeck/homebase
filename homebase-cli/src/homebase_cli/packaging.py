@@ -139,25 +139,48 @@ def schedule_windows_self_update(
     repo_url: str = DEFAULT_REPO_URL,
     python_bin: str | None = None,
     summary: str | None = None,
-) -> tuple[int, Path]:
-    """Schedule one Windows self-update in a helper process and return its PID and result path."""
+) -> tuple[int, Path, Path]:
+    """Schedule one Windows self-update in a helper process and return its PID, result path, and log path."""
     interpreter = python_bin if python_bin is not None else sys.executable
     helper_dir = Path.home() / ".local" / "share" / "homebase-cli" / "run"
     helper_dir.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     helper_path = helper_dir / f"self-update-{stamp}.py"
     result_path = helper_dir / f"self-update-{stamp}.json"
+    log_path = helper_dir / f"self-update-{stamp}.log"
     package_root = Path(__file__).resolve().parent.parent
+    result_path.write_text(
+        json.dumps(
+            {
+                "ok": False,
+                "status": "scheduled",
+                "ref": ref,
+                "repo_url": repo_url,
+                "requested_at": datetime.now(UTC).isoformat(),
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
     helper_source = textwrap.dedent(
         f"""
         import json
         import sys
         import time
         from pathlib import Path
+        from datetime import UTC, datetime
 
         sys.path.insert(0, {str(package_root)!r})
         from homebase_cli.packaging import install_github_ref  # noqa: E402
 
+        result_path = Path({str(result_path)!r})
+        result_path.write_text(json.dumps({{
+            "ok": False,
+            "status": "running",
+            "started_at": datetime.now(UTC).isoformat(),
+        }}, indent=2, sort_keys=True) + "\\n", encoding="utf-8")
         time.sleep(2.0)
         try:
             _, status = install_github_ref(
@@ -168,6 +191,7 @@ def schedule_windows_self_update(
             )
             payload = {{
                 "ok": True,
+                "status": "done",
                 "installed_version": status.installed_version,
                 "requested_ref": status.requested_ref,
                 "resolved_ref": status.resolved_ref,
@@ -176,20 +200,24 @@ def schedule_windows_self_update(
         except Exception as exc:
             payload = {{
                 "ok": False,
+                "status": "failed",
                 "error": str(exc),
+                "failed_at": datetime.now(UTC).isoformat(),
             }}
-        Path({str(result_path)!r}).write_text(json.dumps(payload, indent=2, sort_keys=True) + "\\n", encoding="utf-8")
+        result_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\\n", encoding="utf-8")
         """
     ).strip() + "\n"
     helper_path.write_text(helper_source, encoding="utf-8")
+    log_handle = log_path.open("a", encoding="utf-8")
     process = subprocess.Popen(
         [interpreter, str(helper_path)],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        stdout=log_handle,
+        stderr=log_handle,
         stdin=subprocess.DEVNULL,
         start_new_session=True,
     )
-    return process.pid, result_path
+    log_handle.close()
+    return process.pid, result_path, log_path
 
 
 def _new_log_path(prefix: str) -> Path:

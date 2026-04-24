@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 from urllib.error import HTTPError
 from types import SimpleNamespace
 
@@ -244,11 +245,15 @@ def test_schedule_windows_self_update_spawns_helper(tmp_path: Path, monkeypatch)
         return FakeProcess()
 
     monkeypatch.setattr("homebase_cli.packaging.subprocess.Popen", fake_popen)
-    helper_pid, result_path = schedule_windows_self_update("main")
+    helper_pid, result_path, log_path = schedule_windows_self_update("main")
 
     assert helper_pid == 4242
     assert result_path.name.endswith(".json")
+    assert log_path.name.endswith(".log")
+    assert result_path.exists()
     assert captured["args"][0] == str(tmp_path / "venv" / "Scripts" / "python.exe")
     helper_script = Path(captured["args"][1])
     assert helper_script.exists()
     assert "install_github_ref" in helper_script.read_text(encoding="utf-8")
+    result_payload = json.loads(result_path.read_text(encoding="utf-8"))
+    assert result_payload["status"] == "scheduled"
