@@ -154,6 +154,7 @@ def schedule_windows_self_update(
     repo_url: str = DEFAULT_REPO_URL,
     python_bin: str | None = None,
     summary: str | None = None,
+    wait_for_pid: int | None = None,
 ) -> tuple[int, Path, Path]:
     """Schedule one Windows self-update in a helper process and return its PID, result path, and log path."""
     interpreter = python_bin if python_bin is not None else sys.executable
@@ -185,6 +186,7 @@ def schedule_windows_self_update(
     helper_source = textwrap.dedent(
         f"""
         import json
+        import os
         import sys
         import time
         from pathlib import Path
@@ -199,7 +201,14 @@ def schedule_windows_self_update(
             "status": "running",
             "started_at": datetime.now(UTC).isoformat(),
         }}, indent=2, sort_keys=True) + "\\n", encoding="utf-8")
-        time.sleep(2.0)
+        wait_for_pid = {wait_for_pid!r}
+        if wait_for_pid is not None:
+            for _ in range(240):
+                try:
+                    os.kill(wait_for_pid, 0)
+                except OSError:
+                    break
+                time.sleep(0.25)
         try:
             _, status = install_github_ref(
                 {ref!r},

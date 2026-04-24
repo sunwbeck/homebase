@@ -247,7 +247,7 @@ def test_schedule_windows_self_update_spawns_helper(tmp_path: Path, monkeypatch)
         return FakeProcess()
 
     monkeypatch.setattr("homebase_cli.packaging.subprocess.Popen", fake_popen)
-    helper_pid, result_path, log_path = schedule_windows_self_update("main")
+    helper_pid, result_path, log_path = schedule_windows_self_update("main", wait_for_pid=1234)
 
     assert helper_pid == 4242
     assert result_path.name.endswith(".json")
@@ -257,6 +257,7 @@ def test_schedule_windows_self_update_spawns_helper(tmp_path: Path, monkeypatch)
     helper_script = Path(captured["args"][2])
     assert helper_script.exists()
     assert "install_github_ref" in helper_script.read_text(encoding="utf-8")
+    assert "wait_for_pid = 1234" in helper_script.read_text(encoding="utf-8")
     result_payload = json.loads(result_path.read_text(encoding="utf-8"))
     assert result_payload["status"] == "scheduled"
 
