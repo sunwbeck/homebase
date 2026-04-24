@@ -281,6 +281,21 @@ def _write_log(path: Path, content: str) -> Path:
     return path
 
 
+def _cleanup_tempdir(holder: tempfile.TemporaryDirectory[str], *, on_tick: Callable[[], None] | None = None) -> str | None:
+    """Best-effort cleanup for one temporary directory, tolerating Windows file-lock delays."""
+    last_error: OSError | None = None
+    for _ in range(20):
+        try:
+            holder.cleanup()
+            return None
+        except OSError as exc:
+            last_error = exc
+            if on_tick is not None:
+                on_tick()
+            time.sleep(0.25)
+    return str(last_error) if last_error is not None else "temporary directory cleanup failed"
+
+
 def _run_logged(
     args: list[str],
     *,
@@ -632,6 +647,7 @@ def install_github_ref(
 ) -> tuple[LoggedResult, InstalledPackageStatus]:
     """Install or update from one GitHub ref and persist local install state."""
     interpreter = python_bin if python_bin is not None else sys.executable
+    cleanup_warning: str | None = None
     if on_stage is not None:
         on_stage(1, 6, f"downloading GitHub archive {github_repo_slug(repo_url)}@{ref}")
     try:
@@ -651,7 +667,7 @@ def install_github_ref(
             on_tick=on_tick,
         )
     finally:
-        source_dir_holder.cleanup()
+        cleanup_warning = _cleanup_tempdir(source_dir_holder, on_tick=on_tick)
     if result.returncode != 0:
         raise PackageOperationError("install failed", result.log_path)
     _refresh_windows_command_shims(interpreter)
@@ -678,4 +694,7 @@ def install_github_ref(
     save_install_state(status)
     if on_stage is not None:
         on_stage(6, 6, f"saved install state to {INSTALL_STATE_PATH}")
+    if cleanup_warning:
+        log_body = result.log_path.read_text(encoding="utf-8") if result.log_path.exists() else ""
+        _write_log(result.log_path, log_body + f"\n\ncleanup warning:\n{cleanup_warning}\n")
     return result, status

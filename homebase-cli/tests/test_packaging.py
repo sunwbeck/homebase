@@ -274,3 +274,33 @@ def test_wait_for_windows_self_update_times_out_with_last_payload(tmp_path: Path
     result_path.write_text('{"ok": false, "status": "running"}\n', encoding="utf-8")
     payload = wait_for_windows_self_update(result_path, timeout_seconds=0.05, poll_interval=0.01)
     assert payload["status"] == "running"
+
+
+def test_install_github_ref_tolerates_tempdir_cleanup_error(tmp_path: Path, monkeypatch) -> None:
+    install_root = tmp_path / "source" / "homebase-cli"
+    install_root.mkdir(parents=True)
+
+    class Holder:
+        def cleanup(self):
+            raise PermissionError("file is in use")
+
+    monkeypatch.setattr("homebase_cli.packaging._prepare_install_source", lambda repo_url, ref: (Holder(), install_root))
+    monkeypatch.setattr(
+        "homebase_cli.packaging._run_logged",
+        lambda args, cwd, log_prefix, on_tick=None: SimpleNamespace(
+            returncode=0,
+            stdout="ok",
+            stderr="",
+            log_path=tmp_path / "install.log",
+        ),
+    )
+    monkeypatch.setattr("homebase_cli.packaging._write_log", lambda path, content: path.write_text(content, encoding="utf-8") or path)
+    monkeypatch.setattr("homebase_cli.packaging.installed_version", lambda python_bin=None: "0.2.0")
+    monkeypatch.setattr("homebase_cli.packaging.resolve_github_ref", lambda repo_url, ref: "abc123")
+    monkeypatch.setattr("homebase_cli.packaging.save_install_state", lambda status, path=None: tmp_path / "install-state.json")
+
+    result, status = packaging.install_github_ref("main", python_bin="/tmp/fake-python")
+
+    assert result.returncode == 0
+    assert status.resolved_ref == "abc123"
+    assert "cleanup warning" in (tmp_path / "install.log").read_text(encoding="utf-8")
