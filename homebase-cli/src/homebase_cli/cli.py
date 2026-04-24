@@ -2359,7 +2359,8 @@ def _run_install_flow(
             raise typer.Exit(code=1)
         console.print(f"Re-running update through external Python helper: {helper_path}")
         console.file.flush()
-        os.execv(helper_command[0], helper_command)
+        result = subprocess.run(helper_command, check=False)
+        raise typer.Exit(code=result.returncode)
     local_name = _current_node_name() or "local"
     node_logs = {local_name: []}
     stage_state = {local_name: (1, 6, f"resolving target {ref}", "running")}

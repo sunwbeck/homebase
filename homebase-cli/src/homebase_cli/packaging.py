@@ -182,7 +182,7 @@ def prepare_windows_self_update(
 
         def tick():
             now = time.monotonic()
-            if now - last_tick[0] < 2.0:
+            if now - last_tick[0] < 10.0:
                 return
             step, total, label = current_stage[0]
             print(f"[{{step}}/{{total}}] still running: {{label}}", flush=True)
