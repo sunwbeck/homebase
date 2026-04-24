@@ -58,7 +58,6 @@ from homebase_cli.packaging import (
     install_github_ref,
     latest_github_version,
     load_install_state,
-    schedule_windows_self_update,
     should_defer_windows_self_update,
 )
 from homebase_cli.registry import (
@@ -2347,19 +2346,20 @@ def _run_install_flow(
     summary: str | None,
 ) -> None:
     if should_defer_windows_self_update(python_bin):
-        helper_pid, result_path, log_path = schedule_windows_self_update(
-            ref,
-            repo_url=repo_url,
-            python_bin=python_bin,
-            summary=summary,
-            wait_for_pid=os.getpid(),
+        console.print("[red]Windows local self-update is not supported through `homebase package` yet.[/red]")
+        console.print("Run this PowerShell command instead:")
+        console.print(
+            f'  irm https://raw.githubusercontent.com/sunwbeck/homebase/main/scripts/install-homebase.ps1 | iex'
+            if repo_url == DEFAULT_REPO_URL and ref == "main"
+            else f'  $py = "$HOME\\.local\\share\\homebase-cli\\.venv\\Scripts\\python.exe"; '
+                 f'$tmp = Join-Path $env:TEMP ("homebase-install-" + [guid]::NewGuid().ToString("N")); '
+                 f'New-Item -ItemType Directory -Force -Path $tmp | Out-Null; '
+                 f'$zip = Join-Path $tmp "homebase.zip"; '
+                 f'Invoke-WebRequest -Uri "{repo_url.removesuffix(".git")}/archive/{ref}.zip" -OutFile $zip; '
+                 f'Expand-Archive -LiteralPath $zip -DestinationPath $tmp -Force; '
+                 f'& $py -m pip install --upgrade --force-reinstall --no-cache-dir (Join-Path $tmp "homebase-{ref}\\homebase-cli")'
         )
-        console.print("Windows self-update helper started.")
-        console.print(f"helper pid: {helper_pid}")
-        console.print(f"result file: {result_path}")
-        console.print(f"log file: {log_path}")
-        console.print("This command will now exit so the helper can replace the running Windows executables.")
-        raise typer.Exit(code=0)
+        raise typer.Exit(code=1)
     local_name = _current_node_name() or "local"
     node_logs = {local_name: []}
     stage_state = {local_name: (1, 6, f"resolving target {ref}", "running")}
@@ -2465,20 +2465,14 @@ def package_install_command(
             is_local = bool(current_name and node.name == current_name)
             if is_local:
                 if should_defer_windows_self_update(python_bin):
-                    helper_pid, result_path, log_path = schedule_windows_self_update(
-                        selected_ref,
-                        repo_url=repo_url,
-                        python_bin=python_bin,
-                        summary=selected_summary,
-                    )
                     return {
                         "payload": {
-                            "installed_version": "scheduled",
+                            "installed_version": "manual install required",
                             "requested_ref": selected_ref,
                             "resolved_ref": "",
                         },
                         "address": detect_primary_address() or "",
-                        "result": f"background helper pid {helper_pid}; result: {result_path}; log: {log_path}",
+                        "result": "run the PowerShell install command shown by `homebase package install` on this Windows node",
                     }
                 try:
                     _, status = install_github_ref(
@@ -2613,20 +2607,14 @@ def package_update_command(
             is_local = bool(current_name and node.name == current_name)
             if is_local:
                 if should_defer_windows_self_update(python_bin):
-                    helper_pid, result_path, log_path = schedule_windows_self_update(
-                        latest.ref,
-                        repo_url=repo_url,
-                        python_bin=python_bin,
-                        summary=latest.summary,
-                    )
                     return {
                         "payload": {
-                            "installed_version": "scheduled",
+                            "installed_version": "manual install required",
                             "requested_ref": latest.ref,
                             "resolved_ref": "",
                         },
                         "address": detect_primary_address() or "",
-                        "result": f"background helper pid {helper_pid}; result: {result_path}; log: {log_path}",
+                        "result": "run the PowerShell install command shown by `homebase package update` on this Windows node",
                     }
                 try:
                     _, status = install_github_ref(
