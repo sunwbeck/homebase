@@ -220,6 +220,35 @@ def schedule_windows_self_update(
     return process.pid, result_path, log_path
 
 
+def wait_for_windows_self_update(
+    result_path: Path,
+    *,
+    timeout_seconds: float = 120.0,
+    poll_interval: float = 0.25,
+    on_tick: Callable[[], None] | None = None,
+) -> dict[str, Any]:
+    """Wait for one scheduled Windows self-update to finish and return the final payload."""
+    deadline = time.monotonic() + timeout_seconds
+    last_payload: dict[str, Any] = {}
+    while time.monotonic() < deadline:
+        if on_tick is not None:
+            on_tick()
+        if result_path.exists():
+            try:
+                payload = json.loads(result_path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                payload = {}
+            if isinstance(payload, dict):
+                last_payload = payload
+                status = str(payload.get("status", "")).strip().lower()
+                if status in {"done", "failed"}:
+                    return payload
+        time.sleep(poll_interval)
+    if last_payload:
+        return last_payload
+    return {"ok": False, "status": "timeout", "error": "timed out waiting for Windows self-update result"}
+
+
 def _new_log_path(prefix: str) -> Path:
     """Return a timestamped log path for one package operation."""
     LOG_DIR.mkdir(parents=True, exist_ok=True)

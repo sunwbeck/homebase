@@ -60,6 +60,7 @@ from homebase_cli.packaging import (
     load_install_state,
     schedule_windows_self_update,
     should_defer_windows_self_update,
+    wait_for_windows_self_update,
 )
 from homebase_cli.registry import (
     RoleGroup,
@@ -2353,12 +2354,28 @@ def _run_install_flow(
             python_bin=python_bin,
             summary=summary,
         )
-        console.print("[yellow]Windows local self-update started in a background helper.[/yellow]")
-        console.print(f"helper pid: {helper_pid}")
+        local_name = _current_node_name() or "local"
+        node_logs = {local_name: []}
+        stage_state = {local_name: (3, 6, f"waiting for helper pid {helper_pid}", "running")}
+        with Live(_render_package_panels(selected_nodes=[SimpleNamespace(name=local_name)], node_logs=node_logs, stage_state=stage_state), console=console, refresh_per_second=8) as live:
+            def tick() -> None:
+                live.update(_render_package_panels(selected_nodes=[SimpleNamespace(name=local_name)], node_logs=node_logs, stage_state=stage_state), refresh=True)
+
+            payload = wait_for_windows_self_update(result_path, on_tick=tick)
+        status_value = str(payload.get("status", "")).strip().lower()
+        if payload.get("ok") is True and status_value == "done":
+            stage_state[local_name] = (6, 6, "done", "done")
+            console.print(f"[green]Installed version:[/green] {payload.get('installed_version') or 'unknown'}")
+            console.print(f"[green]Requested ref:[/green] {payload.get('requested_ref') or ref}")
+            if payload.get("resolved_ref"):
+                console.print(f"[green]Resolved commit:[/green] {payload.get('resolved_ref')}")
+            return
+        console.print("[red]Windows self-update failed.[/red]")
+        if payload.get("error"):
+            console.print(str(payload.get("error")))
         console.print(f"result file: {result_path}")
         console.print(f"log file: {log_path}")
-        console.print("Open a new terminal in a few seconds and check `homebase package status`.")
-        return
+        raise typer.Exit(code=1)
     local_name = _current_node_name() or "local"
     node_logs = {local_name: []}
     stage_state = {local_name: (1, 6, f"resolving target {ref}", "running")}

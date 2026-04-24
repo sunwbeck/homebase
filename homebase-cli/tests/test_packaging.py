@@ -16,6 +16,7 @@ from homebase_cli.packaging import (
     save_install_state,
     schedule_windows_self_update,
     should_defer_windows_self_update,
+    wait_for_windows_self_update,
     installed_version,
 )
 from homebase_cli import packaging
@@ -257,3 +258,18 @@ def test_schedule_windows_self_update_spawns_helper(tmp_path: Path, monkeypatch)
     assert "install_github_ref" in helper_script.read_text(encoding="utf-8")
     result_payload = json.loads(result_path.read_text(encoding="utf-8"))
     assert result_payload["status"] == "scheduled"
+
+
+def test_wait_for_windows_self_update_returns_done_payload(tmp_path: Path) -> None:
+    result_path = tmp_path / "result.json"
+    result_path.write_text('{"ok": true, "status": "done", "installed_version": "0.1.45"}\n', encoding="utf-8")
+    payload = wait_for_windows_self_update(result_path, timeout_seconds=0.1, poll_interval=0.01)
+    assert payload["status"] == "done"
+    assert payload["installed_version"] == "0.1.45"
+
+
+def test_wait_for_windows_self_update_times_out_with_last_payload(tmp_path: Path) -> None:
+    result_path = tmp_path / "result.json"
+    result_path.write_text('{"ok": false, "status": "running"}\n', encoding="utf-8")
+    payload = wait_for_windows_self_update(result_path, timeout_seconds=0.05, poll_interval=0.01)
+    assert payload["status"] == "running"
