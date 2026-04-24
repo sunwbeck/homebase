@@ -1,5 +1,6 @@
 from pathlib import Path
 import json
+import subprocess
 from urllib.error import HTTPError
 from types import SimpleNamespace
 
@@ -322,3 +323,29 @@ def test_install_github_ref_tolerates_tempdir_cleanup_error(tmp_path: Path, monk
     assert result.returncode == 0
     assert status.resolved_ref == "abc123"
     assert "cleanup warning" in (tmp_path / "install.log").read_text(encoding="utf-8")
+
+
+def test_run_logged_consumes_output_while_waiting(tmp_path: Path, monkeypatch) -> None:
+    ticks = []
+
+    class FakeProcess:
+        def __init__(self):
+            self.returncode = None
+            self.calls = 0
+
+        def communicate(self, timeout=None):
+            self.calls += 1
+            if self.calls == 1:
+                raise subprocess.TimeoutExpired(cmd=["python"], timeout=timeout)
+            self.returncode = 0
+            return ("stdout text", "stderr text")
+
+    monkeypatch.setattr("homebase_cli.packaging._new_log_path", lambda prefix: tmp_path / "run.log")
+    monkeypatch.setattr("homebase_cli.packaging.subprocess.Popen", lambda *args, **kwargs: FakeProcess())
+
+    result = packaging._run_logged(["python"], cwd=tmp_path, log_prefix="run", on_tick=lambda: ticks.append("tick"))
+
+    assert ticks == ["tick"]
+    assert result.returncode == 0
+    assert result.stdout == "stdout text"
+    assert result.stderr == "stderr text"

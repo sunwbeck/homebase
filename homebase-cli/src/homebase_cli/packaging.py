@@ -374,11 +374,13 @@ def _run_logged(
         text=True,
         cwd=cwd,
     )
-    while process.poll() is None:
-        if on_tick is not None:
-            on_tick()
-        time.sleep(0.15)
-    stdout, stderr = process.communicate()
+    while True:
+        try:
+            stdout, stderr = process.communicate(timeout=0.15)
+            break
+        except subprocess.TimeoutExpired:
+            if on_tick is not None:
+                on_tick()
     log_body = [
         f"command: {' '.join(shlex.quote(arg) for arg in args)}",
         f"cwd: {cwd}",
