@@ -285,10 +285,10 @@ def test_prepare_windows_self_update_uses_external_python(tmp_path: Path, monkey
 
 def test_wait_for_windows_self_update_returns_done_payload(tmp_path: Path) -> None:
     result_path = tmp_path / "result.json"
-    result_path.write_text('{"ok": true, "status": "done", "installed_version": "0.1.45"}\n', encoding="utf-8")
+    result_path.write_text('{"ok": true, "status": "done", "installed_version": "0.1.46"}\n', encoding="utf-8")
     payload = wait_for_windows_self_update(result_path, timeout_seconds=0.1, poll_interval=0.01)
     assert payload["status"] == "done"
-    assert payload["installed_version"] == "0.1.45"
+    assert payload["installed_version"] == "0.1.46"
 
 
 def test_wait_for_windows_self_update_times_out_with_last_payload(tmp_path: Path) -> None:
