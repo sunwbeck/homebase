@@ -86,6 +86,7 @@ from homebase_cli.scanner import (
     fetch_package_status,
     fetch_profile,
     load_discovered_nodes,
+    PairingError,
     request_package_install,
     request_package_upgrade,
     request_service_action,
@@ -1060,10 +1061,10 @@ def _resolve_profile_for_node(selected: DiscoveredNode, client_port: int) -> obj
     pair_code = normalize_pair_code(typer.prompt("8-digit pairing code", type=str).strip())
     if len(pair_code) != 8 or not pair_code.isdigit():
         raise typer.BadParameter("pairing code must be exactly 8 digits")
-    profile = pair_with_client(selected.address, pair_code, port=client_port)
-    if profile is None:
-        raise typer.BadParameter("pairing failed; verify the code shown on the client and try again")
-    return profile
+    try:
+        return pair_with_client(selected.address, pair_code, port=client_port)
+    except PairingError as exc:
+        raise typer.BadParameter(f"pairing failed: {exc}") from exc
 
 
 @connect_app.command("scan")

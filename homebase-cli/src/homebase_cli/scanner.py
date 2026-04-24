@@ -47,6 +47,10 @@ class DiscoveredNode:
     port: int = DEFAULT_CLIENT_PORT
 
 
+class PairingError(RuntimeError):
+    """Raised when pairing fails with a concrete remote or transport error."""
+
+
 def discovery_path(path: Path | None = None) -> Path:
     """Resolve the active discovery cache path."""
     if path is not None:
@@ -215,14 +219,23 @@ def pair_with_client(
         body=payload,
     )
     if result is None:
-        return None
+        raise PairingError(f"no response from {address}:{port}")
     status, body = result
     if status != 200:
-        return None
+        message = f"pair request failed with HTTP {status}"
+        try:
+            error_payload = json.loads(body)
+        except json.JSONDecodeError:
+            error_payload = None
+        if isinstance(error_payload, dict):
+            error_text = str(error_payload.get("error", "")).strip()
+            if error_text:
+                message = error_text
+        raise PairingError(message)
     try:
         return parse_profile_payload(json.loads(body))
     except (json.JSONDecodeError, ValueError):
-        return None
+        raise PairingError("client returned an invalid profile payload")
 
 
 def fetch_profile(

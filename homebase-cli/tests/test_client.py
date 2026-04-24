@@ -20,6 +20,7 @@ from homebase_cli.client import (
     parse_pair_request,
     parse_profile_payload,
     normalize_pair_code,
+    pairing_rejection_reason,
     save_package_job_state,
     save_client_state,
     state_path,
@@ -107,6 +108,30 @@ def test_pair_controller_rejects_expired_code(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     assert not pair_controller(PairRequest(controller_id="control", code="12345678"), path)
+
+
+def test_pairing_rejection_reason_reports_expired_code(tmp_path: Path) -> None:
+    path = tmp_path / "client-state.json"
+    path.write_text(
+        json.dumps(
+            {
+                "pair_code": "12345678",
+                "pair_code_expires_at": (datetime.now(UTC) - timedelta(minutes=1)).replace(microsecond=0).isoformat(),
+                "paired_controllers": [],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    reason = pairing_rejection_reason(PairRequest(controller_id="control", code="12345678"), path)
+    assert reason == "pairing code expired"
+
+
+def test_pairing_rejection_reason_reports_mismatch(tmp_path: Path) -> None:
+    path = tmp_path / "client-state.json"
+    save_client_state(ClientState(pair_code="12345678", paired_controllers=()), path)
+    reason = pairing_rejection_reason(PairRequest(controller_id="control", code="87654321"), path)
+    assert reason == "pairing code mismatch"
 
 
 def test_parse_package_install_request_requires_ref() -> None:

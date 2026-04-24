@@ -5,6 +5,7 @@ from homebase_cli.client import ClientDiscovery, ClientProfile
 from homebase_cli.registry import add_node
 from homebase_cli.scanner import (
     DiscoveredNode,
+    PairingError,
     detect_scannable_networks,
     fetch_package_status,
     iter_candidate_addresses,
@@ -109,6 +110,19 @@ def test_pair_with_client_returns_profile(monkeypatch) -> None:
     )
     paired = pair_with_client("192.168.1.10", "12345678")
     assert paired == profile
+
+
+def test_pair_with_client_raises_remote_error(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "homebase_cli.scanner._http_request",
+        lambda method, address, path, **kwargs: (403, '{"error":"pairing code expired"}'),
+    )
+    try:
+        pair_with_client("192.168.1.10", "12345678")
+    except PairingError as exc:
+        assert str(exc) == "pairing code expired"
+    else:
+        raise AssertionError("expected PairingError")
 
 
 def test_fetch_package_status_returns_payload(monkeypatch) -> None:

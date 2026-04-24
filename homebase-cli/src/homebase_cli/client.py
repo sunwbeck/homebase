@@ -937,6 +937,25 @@ def pair_controller(request: PairRequest, path: Path | None = None) -> bool:
     return True
 
 
+def pairing_rejection_reason(request: PairRequest, path: Path | None = None) -> str | None:
+    """Return the concrete reason one pairing request would be rejected."""
+    target = state_path(path)
+    if target.exists():
+        try:
+            payload = json.loads(target.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            payload = {}
+        saved_code = str(payload.get("pair_code", "")).strip()
+        saved_expiry = payload.get("pair_code_expires_at")
+        saved_expiry = str(saved_expiry).strip() if saved_expiry not in (None, "") else None
+        if len(saved_code) == 8 and saved_code.isdigit() and request.code == saved_code and _pair_code_is_expired(saved_expiry):
+            return "pairing code expired"
+    current = load_client_state(path)
+    if request.code != current.pair_code:
+        return "pairing code mismatch"
+    return None
+
+
 def discovery_payload() -> dict[str, Any]:
     """Return the current minimal discovery payload."""
     return asdict(local_discovery())
@@ -1172,8 +1191,12 @@ def make_handler() -> type[BaseHTTPRequestHandler]:
                 except (json.JSONDecodeError, ValueError) as exc:
                     self._send_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
                     return
+                rejection = pairing_rejection_reason(request)
+                if rejection is not None:
+                    self._send_json({"error": rejection}, status=HTTPStatus.FORBIDDEN)
+                    return
                 if not pair_controller(request):
-                    self._send_json({"error": "pairing code mismatch"}, status=HTTPStatus.FORBIDDEN)
+                    self._send_json({"error": "pairing failed"}, status=HTTPStatus.FORBIDDEN)
                     return
                 self._send_json(profile_payload())
                 return
