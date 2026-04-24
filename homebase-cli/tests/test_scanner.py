@@ -112,6 +112,18 @@ def test_pair_with_client_returns_profile(monkeypatch) -> None:
     assert paired == profile
 
 
+def test_pair_with_client_uses_longer_timeout(monkeypatch) -> None:
+    seen = {}
+
+    def fake_request(method, address, path, **kwargs):
+        seen["timeout"] = kwargs.get("timeout")
+        return (200, '{"node_id":"abc123","node_name":"app","hostname":"app","platform":"Linux 6.1","version":"0.1.0"}')
+
+    monkeypatch.setattr("homebase_cli.scanner._http_request", fake_request)
+    pair_with_client("192.168.1.10", "12345678")
+    assert seen["timeout"] == 8.0
+
+
 def test_pair_with_client_raises_remote_error(monkeypatch) -> None:
     monkeypatch.setattr(
         "homebase_cli.scanner._http_request",

@@ -198,7 +198,7 @@ def pair_with_client(
     code: str,
     *,
     port: int = DEFAULT_CLIENT_PORT,
-    timeout: float = 1.0,
+    timeout: float = 8.0,
     controller_id: str | None = None,
 ) -> ClientProfile | None:
     """Send one pair request and return the full client profile on success."""
@@ -242,7 +242,7 @@ def fetch_profile(
     address: str,
     *,
     port: int = DEFAULT_CLIENT_PORT,
-    timeout: float = 0.5,
+    timeout: float = 3.0,
     controller_id: str | None = None,
 ) -> ClientProfile | None:
     """Fetch the full profile for an already paired controller."""
