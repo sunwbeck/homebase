@@ -27,6 +27,7 @@ from homebase_cli.client import (
     make_handler,
     normalize_pair_code,
     pairing_rejection_reason,
+    save_connect_runtime,
     save_package_job_state,
     save_client_state,
     state_path,
@@ -205,6 +206,58 @@ def test_interface_addresses_handles_empty_stdout(monkeypatch) -> None:
         lambda script: subprocess.CompletedProcess(args=["powershell"], returncode=0, stdout="", stderr=""),
     )
     assert __import__("homebase_cli.client", fromlist=["_interface_addresses"])._interface_addresses() == {}
+
+
+def test_connect_server_running_uses_tasklist_on_windows(tmp_path: Path, monkeypatch) -> None:
+    path = tmp_path / "connect-runtime.json"
+    save_connect_runtime(
+        __import__("homebase_cli.client", fromlist=["ConnectRuntime"]).ConnectRuntime(
+            pid=45332,
+            host="0.0.0.0",
+            port=8428,
+            started_at="2026-04-25T00:00:00+00:00",
+            log_path="C:\\logs\\connect-server.log",
+        ),
+        path,
+    )
+    monkeypatch.setattr("homebase_cli.client.platform_module.system", lambda: "Windows")
+    monkeypatch.setattr(
+        "homebase_cli.client.subprocess.run",
+        lambda *args, **kwargs: SimpleNamespace(
+            returncode=0,
+            stdout='"python.exe","45332","Console","1","12,345 K"\n',
+            stderr="",
+        ),
+    )
+    runtime = __import__("homebase_cli.client", fromlist=["connect_server_running"]).connect_server_running(path)
+    assert runtime is not None
+    assert runtime.pid == 45332
+
+
+def test_connect_server_running_clears_missing_windows_pid(tmp_path: Path, monkeypatch) -> None:
+    path = tmp_path / "connect-runtime.json"
+    save_connect_runtime(
+        __import__("homebase_cli.client", fromlist=["ConnectRuntime"]).ConnectRuntime(
+            pid=45332,
+            host="0.0.0.0",
+            port=8428,
+            started_at="2026-04-25T00:00:00+00:00",
+            log_path="C:\\logs\\connect-server.log",
+        ),
+        path,
+    )
+    monkeypatch.setattr("homebase_cli.client.platform_module.system", lambda: "Windows")
+    monkeypatch.setattr(
+        "homebase_cli.client.subprocess.run",
+        lambda *args, **kwargs: SimpleNamespace(
+            returncode=0,
+            stdout="INFO: No tasks are running which match the specified criteria.\n",
+            stderr="",
+        ),
+    )
+    runtime = __import__("homebase_cli.client", fromlist=["connect_server_running"]).connect_server_running(path)
+    assert runtime is None
+    assert not path.exists()
 
 
 def test_parse_pair_request_requires_8_digits() -> None:

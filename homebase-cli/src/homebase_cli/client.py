@@ -168,24 +168,48 @@ def clear_connect_runtime(path: Path | None = None) -> None:
         return
 
 
+def _pid_exists(pid: int) -> bool:
+    """Return whether one PID is alive on the current platform."""
+    if pid <= 0:
+        return False
+    if _is_windows():
+        try:
+            proc = subprocess.run(
+                ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+        except OSError:
+            return False
+        if proc.returncode != 0:
+            return False
+        output = proc.stdout.strip()
+        if not output:
+            return False
+        if "No tasks are running" in output:
+            return False
+        return f'"{pid}"' in output or f",{pid}," in output
+    try:
+        os.kill(pid, 0)
+    except PermissionError:
+        return True
+    except ProcessLookupError:
+        return False
+    except OSError:
+        return Path(f"/proc/{pid}").exists()
+    return True
+
+
 def connect_server_running(path: Path | None = None) -> ConnectRuntime | None:
     """Return the runtime when the managed connect server PID is alive."""
     runtime = load_connect_runtime(path)
     if runtime is None:
         return None
-    try:
-        os.kill(runtime.pid, 0)
-    except PermissionError:
+    if _pid_exists(runtime.pid):
         return runtime
-    except ProcessLookupError:
-        clear_connect_runtime(path)
-        return None
-    except OSError:
-        if Path(f"/proc/{runtime.pid}").exists():
-            return runtime
-        clear_connect_runtime(path)
-        return None
-    return runtime
+    clear_connect_runtime(path)
+    return None
 
 
 def stop_connect_server(path: Path | None = None) -> ConnectRuntime | None:
