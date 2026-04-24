@@ -19,6 +19,7 @@ from homebase_cli.client import (
     parse_discovery_payload,
     parse_pair_request,
     parse_profile_payload,
+    paired_profile_payload,
     normalize_pair_code,
     pairing_rejection_reason,
     save_package_job_state,
@@ -57,6 +58,24 @@ def test_parse_profile_payload_includes_ports_and_services() -> None:
     assert profile.open_ports == (22, 8080)
     assert profile.node_name == "app"
     assert profile.services == ("ssh", "docker")
+
+
+def test_paired_profile_payload_is_lightweight(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "homebase_cli.client.local_discovery",
+        lambda: SimpleNamespace(
+            node_id="abc123",
+            node_name="workstation",
+            hostname="DESKTOP-SB",
+            platform="Windows 11",
+            version="0.1.0",
+            description="daily workstation",
+        ),
+    )
+    payload = paired_profile_payload()
+    assert payload["node_id"] == "abc123"
+    assert payload["open_ports"] == []
+    assert payload["service_records"] == []
 
 
 def test_parse_pair_request_requires_8_digits() -> None:

@@ -987,6 +987,24 @@ def profile_payload() -> dict[str, Any]:
     return payload
 
 
+def paired_profile_payload() -> dict[str, Any]:
+    """Return a lightweight profile payload for the initial pair response."""
+    discovery = local_discovery()
+    return {
+        "node_id": discovery.node_id,
+        "node_name": discovery.node_name,
+        "hostname": discovery.hostname,
+        "platform": discovery.platform,
+        "version": discovery.version,
+        "description": discovery.description,
+        "open_ports": [],
+        "services": [],
+        "exposed_endpoints": [],
+        "endpoint_records": [],
+        "service_records": [],
+    }
+
+
 def package_status_payload() -> dict[str, Any]:
     """Return the current installed homebase package state."""
     status = load_install_state()
@@ -1156,7 +1174,7 @@ def make_handler() -> type[BaseHTTPRequestHandler]:
                 if _require_paired_controller(self.headers) is None:
                     self._send_json({"error": "not paired"}, status=HTTPStatus.FORBIDDEN)
                     return
-                self._send_json(profile_payload())
+                self._send_json(paired_profile_payload())
                 return
             if path == PACKAGE_STATUS_PATH:
                 if _require_paired_controller(self.headers) is None:
