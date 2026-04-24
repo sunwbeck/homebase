@@ -13,6 +13,8 @@ from homebase_cli.packaging import (
     install_command,
     load_install_state,
     save_install_state,
+    schedule_windows_self_update,
+    should_defer_windows_self_update,
     installed_version,
 )
 from homebase_cli import packaging
@@ -219,3 +221,34 @@ def test_install_github_ref_refreshes_windows_shims(tmp_path: Path, monkeypatch)
     assert (tmp_path / ".local" / "bin" / "homebase.cmd").exists()
     assert (tmp_path / ".local" / "bin" / "hb.cmd").exists()
     assert seen["status"].resolved_ref == "abc123"
+
+
+def test_should_defer_windows_self_update_only_for_current_interpreter(monkeypatch) -> None:
+    monkeypatch.setattr("homebase_cli.packaging.platform.system", lambda: "Windows")
+    monkeypatch.setattr("homebase_cli.packaging.sys.executable", r"C:\hb\Scripts\python.exe")
+    assert should_defer_windows_self_update(r"C:\hb\Scripts\python.exe")
+    assert not should_defer_windows_self_update(r"C:\other\python.exe")
+
+
+def test_schedule_windows_self_update_spawns_helper(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr("homebase_cli.packaging.platform.system", lambda: "Windows")
+    monkeypatch.setattr("homebase_cli.packaging.Path.home", lambda: tmp_path)
+    monkeypatch.setattr("homebase_cli.packaging.sys.executable", str(tmp_path / "venv" / "Scripts" / "python.exe"))
+    captured = {}
+
+    class FakeProcess:
+        pid = 4242
+
+    def fake_popen(args, stdout=None, stderr=None, stdin=None, start_new_session=None):
+        captured["args"] = args
+        return FakeProcess()
+
+    monkeypatch.setattr("homebase_cli.packaging.subprocess.Popen", fake_popen)
+    helper_pid, result_path = schedule_windows_self_update("main")
+
+    assert helper_pid == 4242
+    assert result_path.name.endswith(".json")
+    assert captured["args"][0] == str(tmp_path / "venv" / "Scripts" / "python.exe")
+    helper_script = Path(captured["args"][1])
+    assert helper_script.exists()
+    assert "install_github_ref" in helper_script.read_text(encoding="utf-8")

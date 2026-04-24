@@ -16,6 +16,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import textwrap
 import time
 from typing import Any, Callable
 from urllib.error import HTTPError, URLError
@@ -37,6 +38,15 @@ class PackageOperationError(RuntimeError):
     def __init__(self, message: str, log_path: Path):
         super().__init__(message)
         self.log_path = log_path
+
+
+class DeferredSelfUpdate(RuntimeError):
+    """Raised when a Windows self-update is scheduled in a helper process."""
+
+    def __init__(self, message: str, helper_pid: int, result_path: Path):
+        super().__init__(message)
+        self.helper_pid = helper_pid
+        self.result_path = result_path
 
 
 @dataclass(frozen=True)
@@ -105,6 +115,81 @@ def _refresh_windows_command_shims(interpreter: str) -> None:
     for name, target in targets.items():
         shim_path = user_bin / f"{name}.cmd"
         shim_path.write_text(f'@echo off\n"{target}" %*\n', encoding="ascii")
+
+
+def _same_interpreter_path(left: str, right: str) -> bool:
+    """Return whether two interpreter paths resolve to the same executable."""
+    try:
+        return Path(left).resolve() == Path(right).resolve()
+    except OSError:
+        return os.path.normcase(os.path.abspath(left)) == os.path.normcase(os.path.abspath(right))
+
+
+def should_defer_windows_self_update(python_bin: str | None = None) -> bool:
+    """Return whether the current operation is a Windows self-update."""
+    if not _is_windows():
+        return False
+    interpreter = python_bin if python_bin is not None else sys.executable
+    return _same_interpreter_path(interpreter, sys.executable)
+
+
+def schedule_windows_self_update(
+    ref: str,
+    *,
+    repo_url: str = DEFAULT_REPO_URL,
+    python_bin: str | None = None,
+    summary: str | None = None,
+) -> tuple[int, Path]:
+    """Schedule one Windows self-update in a helper process and return its PID and result path."""
+    interpreter = python_bin if python_bin is not None else sys.executable
+    helper_dir = Path.home() / ".local" / "share" / "homebase-cli" / "run"
+    helper_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    helper_path = helper_dir / f"self-update-{stamp}.py"
+    result_path = helper_dir / f"self-update-{stamp}.json"
+    package_root = Path(__file__).resolve().parent.parent
+    helper_source = textwrap.dedent(
+        f"""
+        import json
+        import sys
+        import time
+        from pathlib import Path
+
+        sys.path.insert(0, {str(package_root)!r})
+        from homebase_cli.packaging import install_github_ref  # noqa: E402
+
+        time.sleep(2.0)
+        try:
+            _, status = install_github_ref(
+                {ref!r},
+                repo_url={repo_url!r},
+                python_bin={interpreter!r},
+                summary={summary!r},
+            )
+            payload = {{
+                "ok": True,
+                "installed_version": status.installed_version,
+                "requested_ref": status.requested_ref,
+                "resolved_ref": status.resolved_ref,
+                "installed_at": status.installed_at,
+            }}
+        except Exception as exc:
+            payload = {{
+                "ok": False,
+                "error": str(exc),
+            }}
+        Path({str(result_path)!r}).write_text(json.dumps(payload, indent=2, sort_keys=True) + "\\n", encoding="utf-8")
+        """
+    ).strip() + "\n"
+    helper_path.write_text(helper_source, encoding="utf-8")
+    process = subprocess.Popen(
+        [interpreter, str(helper_path)],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        stdin=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    return process.pid, result_path
 
 
 def _new_log_path(prefix: str) -> Path:
