@@ -16,6 +16,10 @@ Each node has a distinct responsibility in the overall system:
 
 Together, these nodes form a system where user interaction, infrastructure hosting, and control-plane operations are intentionally separated.
 
+Current implementation note:
+
+- `host.app` is currently the main Linux application VM surfaced in `homebase` service inspection, even though the top-level conceptual model still centers on `control`, `workstation`, and `host`
+
 ## Naming Model
 
 The system uses two naming layers with a strict purpose for each.
@@ -163,7 +167,7 @@ Backup plan:
 ### `host.app`
 
 - Current VM name: `app`
-- Planned platform: Linux VM with Docker
+- Current platform: Linux VM with Docker
 - Role:
   - self-hosted applications
   - Plex
@@ -171,6 +175,11 @@ Backup plan:
   - Prometheus
   - Grafana
   - other persistent observability services such as long-lived metrics or log storage
+
+Current operational note:
+
+- `homebase` currently learns most `host.app` workload identity through Docker container discovery and exposed port inspection
+- service rows should prefer real Docker container names over raw host port numbers when port ownership can be resolved
 
 ### `host.llm-agents`
 
@@ -243,6 +252,12 @@ Planned CLI behavior:
 - autocompletion-friendly paths
 - status inspection by node or subnode
 - predefined operational commands
+
+Current CLI summary behavior:
+
+- `homebase status` is now intended to be a compact node summary showing identity, address, platform, and client runtime state
+- detailed network exposure is intentionally pushed down into `homebase service list`, `homebase service show`, and `homebase service search`
+- `homebase service` distinguishes between service records and endpoint-only listeners so operators can tell whether a row reflects a real managed service or only a listening socket
 
 Example resource paths:
 

@@ -15,6 +15,10 @@ Current implementation direction:
 - repo-local docs are updated with the code, rather than keeping a separate NAS docs root
 - managed nodes now have basic Windows profile and service support in addition to Linux
 - Windows local install now has a PowerShell bootstrap path, and package install or update refreshes Windows command shims after pip-based upgrades
+- local package install or update now requests a daemon restart automatically after a successful upgrade
+- `homebase status` now focuses on node identity and client reachability, while service and endpoint detail lives under `homebase service`
+- `homebase service` output now distinguishes true service records from endpoint-only listeners
+- Linux managed nodes now map published Docker host ports back to container names where possible instead of showing only raw port numbers
 
 Current runtime naming:
 
@@ -35,8 +39,30 @@ Current priority:
 - keep service inspection under `service`
 - prepare the controller runtime for upcoming reverse proxy work
 - keep install and rollout behavior GitHub-ref driven
-- keep status output focused on usable exposure and runtime information rather than operator label fields
+- keep status output focused on node identity and runtime state rather than duplicating service exposure detail
 - keep Windows managed-node support at the level of pairing, profile collection, and basic service start/stop until deeper Windows ops are designed
+
+## Current Operator UX
+
+Current command split:
+
+- `homebase status`: node summary only
+- `homebase daemon status|start|stop|restart`: local runtime lifecycle
+- `homebase service list|show|search`: service inventory plus exposed endpoint detail
+
+Current service-model behavior:
+
+- rows with `kind = systemd`, `docker`, or `windows-service` are real service records collected from the node
+- rows with `kind = endpoint` are externally reachable listeners that could not be matched to a stronger service record
+- endpoint rows may still appear as `tcp/<port>` when the node can see the listening socket but cannot attribute it to a systemd unit, Windows service, or Docker container
+- published Docker ports on Linux are now mapped back to container names when `docker ps` exposes enough information to do so
+
+Current update behavior:
+
+- GitHub-ref install and update still run through `homebase package`
+- a successful local install or update now requests a daemon restart automatically so the node runtime comes back on the newly installed code
+- update output should explicitly say that the daemon restart was requested
+- Windows local installs still use the PowerShell bootstrap path, but package update behavior should match the same post-install daemon restart expectation
 
 ## Working Directory Policy
 

@@ -45,6 +45,11 @@ Near-term operator flow:
 4. run `homebase connect scan` from `control` to discover responding homebase clients
 5. run `homebase connect add`, choose one discovered device, and enter the 8-digit code shown on the target node
 
+Current rollout note:
+
+- after a successful local `homebase package install` or `homebase package update`, the node daemon should be restarted automatically so the running runtime matches the newly installed code
+- rollout messaging should explicitly say when that daemon restart has been requested
+
 This keeps discovery generic while making node identity explicit and self-reported. It also separates discovery from trust:
 
 - pre-pairing scan data should stay minimal
@@ -140,6 +145,13 @@ Required UX characteristics:
 - consistent error messages
 - explicit mapping from resource path to action target
 
+Current UX decisions now in effect:
+
+- `homebase status` is a compact node summary, not a full exposure table
+- service and endpoint detail belongs under `homebase service`
+- `homebase service` should distinguish between real service records and endpoint-only listeners
+- endpoint-only listeners should only fall back to `tcp/<port>` style labels when ownership cannot be attributed to a stronger source such as systemd, Docker, or Windows service discovery
+
 Examples:
 
 ```text
@@ -192,6 +204,11 @@ Near-term install preference:
 - if the operator activates a venv first, install should go into that venv
 - if the operator runs install outside a venv, install should go into the current Python environment
 - `homebase` should avoid project-specific install target concepts where normal Python behavior is already clear
+
+Current Windows-specific install direction:
+
+- Windows local install continues to use a PowerShell bootstrap script
+- helper subprocesses used for status, service discovery, and daemon management should run without flashing visible console windows
 
 Long-term rollout preference:
 
