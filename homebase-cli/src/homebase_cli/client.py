@@ -524,6 +524,7 @@ def detect_endpoint_records() -> tuple[tuple[int, str, str | None, int | None], 
             endpoints[(port, pid)] = (port, describe_port(port, fallback_owner), owner, pid)
         return tuple(sorted(endpoints.values(), key=lambda item: (item[0], item[3] or -1)))
     endpoints: dict[tuple[int, int | None], tuple[int, str, str | None, int | None]] = {}
+    docker_port_owners = _docker_port_owners()
     for line in stdout.splitlines():
         parts = line.split()
         if len(parts) < 4:
@@ -552,6 +553,10 @@ def detect_endpoint_records() -> tuple[tuple[int, str, str | None, int | None], 
             pid = int(pid_match.group(1))
         if owner is None and process_blob:
             owner = process_blob.strip() or None
+        if owner in {None, "", "docker-proxy"}:
+            docker_owner = docker_port_owners.get(port)
+            if docker_owner:
+                owner = docker_owner
         fallback_owner = owner or interface_by_address.get(normalized_host)
         endpoints[(port, pid)] = (port, describe_port(port, fallback_owner), owner, pid)
     return tuple(sorted(endpoints.values(), key=lambda item: (item[0], item[3] or -1)))
@@ -572,6 +577,38 @@ def detect_exposed_services() -> tuple[str, ...]:
         if purpose not in labels:
             labels.append(purpose)
     return tuple(labels)
+
+
+def _docker_port_owners() -> dict[int, str]:
+    """Return published Docker host ports mapped to container names."""
+    docker = shutil.which("docker")
+    if docker is None:
+        return {}
+    proc = _subprocess_run(
+        [docker, "ps", "--format", "{{.Names}}\t{{.Ports}}"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        return {}
+    mapping: dict[int, str] = {}
+    port_pattern = re.compile(r"(?:(?:\[::\]|0\.0\.0\.0|:::|[0-9A-Fa-f:.]+):)?(\d+)->")
+    for line in proc.stdout.splitlines():
+        parts = line.split("\t", 1)
+        if len(parts) != 2:
+            continue
+        name = parts[0].strip()
+        ports_blob = parts[1].strip()
+        if not name or not ports_blob:
+            continue
+        for match in port_pattern.finditer(ports_blob):
+            try:
+                port = int(match.group(1))
+            except (TypeError, ValueError):
+                continue
+            mapping.setdefault(port, name)
+    return mapping
 
 
 def detect_running_services() -> tuple[str, ...]:
@@ -1398,6 +1435,7 @@ def make_handler() -> type[BaseHTTPRequestHandler]:
                     "resolved_ref": status.resolved_ref,
                     "summary": status.summary,
                     "installed_at": status.installed_at,
+                    "daemon_restart": "requested",
                 }
             )
 

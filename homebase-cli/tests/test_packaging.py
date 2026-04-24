@@ -210,6 +210,7 @@ def test_install_github_ref_refreshes_windows_shims(tmp_path: Path, monkeypatch)
     )
     monkeypatch.setattr("homebase_cli.packaging.installed_version", lambda python_bin=None: "0.2.0")
     monkeypatch.setattr("homebase_cli.packaging.resolve_github_ref", lambda repo_url, ref: "abc123")
+    monkeypatch.setattr("homebase_cli.packaging.schedule_daemon_restart", lambda python_bin=None: tmp_path / "daemon-restart.py")
     monkeypatch.setattr(
         "homebase_cli.packaging.save_install_state",
         lambda status, path=packaging.INSTALL_STATE_PATH: seen.setdefault("status", status),
@@ -281,6 +282,7 @@ def test_prepare_windows_self_update_uses_external_python(tmp_path: Path, monkey
     assert "install_github_ref" in helper_source
     assert "Updating Windows local installation..." in helper_source
     assert "spinner_frames" in helper_source
+    assert "Daemon restart requested for this node." in helper_source
 
 
 def test_wait_for_windows_self_update_returns_done_payload(tmp_path: Path) -> None:
@@ -319,6 +321,7 @@ def test_install_github_ref_tolerates_tempdir_cleanup_error(tmp_path: Path, monk
     monkeypatch.setattr("homebase_cli.packaging._write_log", lambda path, content: path.write_text(content, encoding="utf-8") or path)
     monkeypatch.setattr("homebase_cli.packaging.installed_version", lambda python_bin=None: "0.2.0")
     monkeypatch.setattr("homebase_cli.packaging.resolve_github_ref", lambda repo_url, ref: "abc123")
+    monkeypatch.setattr("homebase_cli.packaging.schedule_daemon_restart", lambda python_bin=None: tmp_path / "daemon-restart.py")
     monkeypatch.setattr("homebase_cli.packaging.save_install_state", lambda status, path=None: tmp_path / "install-state.json")
 
     result, status = packaging.install_github_ref("main", python_bin="/tmp/fake-python")
@@ -326,6 +329,35 @@ def test_install_github_ref_tolerates_tempdir_cleanup_error(tmp_path: Path, monk
     assert result.returncode == 0
     assert status.resolved_ref == "abc123"
     assert "cleanup warning" in (tmp_path / "install.log").read_text(encoding="utf-8")
+
+
+def test_install_github_ref_schedules_daemon_restart(tmp_path: Path, monkeypatch) -> None:
+    install_root = tmp_path / "source" / "homebase-cli"
+    install_root.mkdir(parents=True)
+    holder = SimpleNamespace(cleanup=lambda: None)
+    seen = {}
+    monkeypatch.setattr("homebase_cli.packaging._prepare_install_source", lambda repo_url, ref: (holder, install_root))
+    monkeypatch.setattr(
+        "homebase_cli.packaging._run_logged",
+        lambda args, cwd, log_prefix, on_tick=None: SimpleNamespace(
+            returncode=0,
+            stdout="ok",
+            stderr="",
+            log_path=tmp_path / "install.log",
+        ),
+    )
+    monkeypatch.setattr("homebase_cli.packaging.installed_version", lambda python_bin=None: "0.2.0")
+    monkeypatch.setattr("homebase_cli.packaging.resolve_github_ref", lambda repo_url, ref: "abc123")
+    monkeypatch.setattr("homebase_cli.packaging.save_install_state", lambda status, path=None: tmp_path / "install-state.json")
+    monkeypatch.setattr(
+        "homebase_cli.packaging.schedule_daemon_restart",
+        lambda python_bin=None: seen.setdefault("helper", tmp_path / "daemon-restart.py"),
+    )
+
+    packaging.install_github_ref("main", python_bin="/tmp/fake-python")
+
+    assert seen["helper"] == tmp_path / "daemon-restart.py"
+    assert "daemon restart helper" in (tmp_path / "install.log").read_text(encoding="utf-8")
 
 
 def test_run_logged_consumes_output_while_waiting(tmp_path: Path, monkeypatch) -> None:

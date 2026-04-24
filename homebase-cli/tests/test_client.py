@@ -439,6 +439,39 @@ def test_detect_endpoint_records_uses_windows_powershell(monkeypatch) -> None:
     assert endpoints == ((8428, "homebase", "python", 4321),)
 
 
+def test_detect_endpoint_records_uses_docker_port_owner_fallback(monkeypatch) -> None:
+    outputs = iter(
+        [
+            SimpleNamespace(
+                returncode=0,
+                stdout='LISTEN 0 4096 0.0.0.0:5000 0.0.0.0:* users:(("docker-proxy",pid=2222,fd=4))\n',
+                stderr="",
+            ),
+            SimpleNamespace(
+                returncode=0,
+                stdout="eth0 UP 192.168.0.20/24\n",
+                stderr="",
+            ),
+            SimpleNamespace(
+                returncode=0,
+                stdout="bazarr\t0.0.0.0:5000->6767/tcp, [::]:5000->6767/tcp\n",
+                stderr="",
+            ),
+        ]
+    )
+    monkeypatch.setattr("homebase_cli.client.platform_module.system", lambda: "Linux")
+    monkeypatch.setattr("homebase_cli.client.os.geteuid", lambda: 0)
+    monkeypatch.setattr(
+        "homebase_cli.client.shutil.which",
+        lambda name: "/usr/bin/docker" if name == "docker" else None,
+    )
+    monkeypatch.setattr("homebase_cli.client.subprocess.run", lambda *args, **kwargs: next(outputs))
+
+    endpoints = detect_endpoint_records()
+
+    assert endpoints == ((5000, "bazarr", "bazarr", 2222),)
+
+
 def test_detect_service_records_uses_windows_services(monkeypatch) -> None:
     monkeypatch.setattr("homebase_cli.client.platform_module.system", lambda: "Windows")
     monkeypatch.setattr(

@@ -23,6 +23,8 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 
+from homebase_cli.runtime import schedule_daemon_restart
+
 
 DEFAULT_REPO_URL = "https://github.com/sunwbeck/homebase.git"
 DEFAULT_SUBDIRECTORY = "homebase-cli"
@@ -225,6 +227,7 @@ def prepare_windows_self_update(
         print(f"Requested ref: {{status.requested_ref}}", flush=True)
         if status.resolved_ref:
             print(f"Resolved commit: {{status.resolved_ref}}", flush=True)
+        print("Daemon restart requested for this node.", flush=True)
         """
     ).strip() + "\n"
     helper_path.write_text(helper_source, encoding="utf-8")
@@ -790,7 +793,13 @@ def install_github_ref(
     save_install_state(status)
     if on_stage is not None:
         on_stage(6, 6, f"saved install state to {INSTALL_STATE_PATH}")
+    restart_helper = schedule_daemon_restart(python_bin=interpreter)
+    if result.log_path.exists():
+        log_body = result.log_path.read_text(encoding="utf-8")
+    else:
+        log_body = ""
+    log_body += f"\n\ndaemon restart helper:\n{restart_helper}\n"
+    _write_log(result.log_path, log_body)
     if cleanup_warning:
-        log_body = result.log_path.read_text(encoding="utf-8") if result.log_path.exists() else ""
-        _write_log(result.log_path, log_body + f"\n\ncleanup warning:\n{cleanup_warning}\n")
+        _write_log(result.log_path, log_body + f"\ncleanup warning:\n{cleanup_warning}\n")
     return result, status

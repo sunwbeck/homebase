@@ -2595,6 +2595,7 @@ def _run_install_flow(
     console.print(f"[green]Requested ref:[/green] {status.requested_ref}")
     if status.resolved_ref:
         console.print(f"[green]Resolved commit:[/green] {status.resolved_ref}")
+    console.print("[green]Daemon restart:[/green] requested for this node")
     if python_bin is not None:
         console.print(f"[green]Installed into Python:[/green] {python_bin}")
 
@@ -2658,7 +2659,7 @@ def package_install_command(
                             "resolved_ref": status.resolved_ref,
                         },
                         "address": detect_primary_address() or "",
-                        "result": "ok",
+                        "result": "ok; daemon restart requested",
                     }
                 except PackageOperationError as exc:
                     return {"payload": None, "address": detect_primary_address() or "", "result": f"log: {exc.log_path}"}
@@ -2718,13 +2719,16 @@ def package_install_command(
 
         def row_builder(node, outcome):
             payload = outcome["payload"] or {}
+            result_value = outcome["result"]
+            if payload.get("daemon_restart") and "daemon restart" not in result_value:
+                result_value = f"{result_value}; daemon restart requested" if result_value else "daemon restart requested"
             return (
                 _node_label(node.name),
                 outcome["address"],
                 str(payload.get("installed_version") or "unknown"),
                 str(payload.get("requested_ref") or selected_ref),
                 str(payload.get("resolved_ref") or ""),
-                outcome["result"],
+                result_value,
             )
 
         for row in _run_package_batch(
@@ -2800,7 +2804,7 @@ def package_update_command(
                             "resolved_ref": status.resolved_ref,
                         },
                         "address": detect_primary_address() or "",
-                        "result": "ok",
+                        "result": "ok; daemon restart requested",
                     }
                 except PackageOperationError as exc:
                     return {"payload": None, "address": detect_primary_address() or "", "result": f"log: {exc.log_path}"}
@@ -2859,13 +2863,16 @@ def package_update_command(
 
         def row_builder(node, outcome):
             payload = outcome["payload"] or {}
+            result_value = outcome["result"]
+            if payload.get("daemon_restart") and "daemon restart" not in result_value:
+                result_value = f"{result_value}; daemon restart requested" if result_value else "daemon restart requested"
             return (
                 _node_label(node.name),
                 outcome["address"],
                 str(payload.get("installed_version") or "unknown"),
                 str(payload.get("requested_ref") or latest.ref),
                 str(payload.get("resolved_ref") or ""),
-                outcome["result"],
+                result_value,
             )
 
         for row in _run_package_batch(
