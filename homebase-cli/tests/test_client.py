@@ -199,6 +199,20 @@ def test_run_powershell_decodes_utf8_bytes(monkeypatch) -> None:
     assert result.stdout == '[{"IPAddress":"192.168.0.10","InterfaceAlias":"Wi-Fi"}]'
 
 
+def test_subprocess_run_hides_windows_helper_windows(monkeypatch) -> None:
+    monkeypatch.setattr("homebase_cli.client.platform_module.system", lambda: "Windows")
+    monkeypatch.setattr("homebase_cli.client.subprocess.CREATE_NO_WINDOW", 0x08000000, raising=False)
+    captured: dict[str, object] = {}
+
+    def fake_run(*args, **kwargs):
+        captured["creationflags"] = kwargs.get("creationflags")
+        return subprocess.CompletedProcess(args=args[0], returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("homebase_cli.client.subprocess.run", fake_run)
+    __import__("homebase_cli.client", fromlist=["_subprocess_run"])._subprocess_run(["tasklist"])
+    assert captured["creationflags"] == 0x08000000
+
+
 def test_interface_addresses_handles_empty_stdout(monkeypatch) -> None:
     monkeypatch.setattr("homebase_cli.client.platform_module.system", lambda: "Windows")
     monkeypatch.setattr(

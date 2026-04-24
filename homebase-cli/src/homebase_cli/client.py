@@ -174,7 +174,7 @@ def _pid_exists(pid: int) -> bool:
         return False
     if _is_windows():
         try:
-            proc = subprocess.run(
+            proc = _subprocess_run(
                 ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
                 check=False,
                 capture_output=True,
@@ -230,7 +230,7 @@ def read_machine_id() -> str | None:
     """Read the local machine-id when present."""
     if platform_module.system().lower() == "windows":
         try:
-            proc = subprocess.run(
+            proc = _subprocess_run(
                 ["reg", "query", r"HKLM\\SOFTWARE\\Microsoft\\Cryptography", "/v", "MachineGuid"],
                 check=False,
                 capture_output=True,
@@ -283,6 +283,14 @@ def _powershell_binary() -> str | None:
     return None
 
 
+def _subprocess_run(*args, **kwargs):
+    """Run one subprocess while suppressing helper console windows on Windows."""
+    if _is_windows():
+        create_no_window = int(getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        kwargs.setdefault("creationflags", create_no_window)
+    return subprocess.run(*args, **kwargs)
+
+
 def _run_powershell(script: str) -> subprocess.CompletedProcess[str] | None:
     """Run one PowerShell script and return the completed process."""
     executable = _powershell_binary()
@@ -294,7 +302,7 @@ def _run_powershell(script: str) -> subprocess.CompletedProcess[str] | None:
         + script
     )
     try:
-        result = subprocess.run(
+        result = _subprocess_run(
             [executable, "-NoProfile", "-NonInteractive", "-Command", wrapped_script],
             check=False,
             capture_output=True,
@@ -343,7 +351,7 @@ def detect_primary_address() -> str | None:
                 return candidate
     for command in (["ip", "-4", "-br", "addr"], ["/usr/sbin/ip", "-4", "-br", "addr"]):
         try:
-            proc = subprocess.run(
+            proc = _subprocess_run(
                 command,
                 check=False,
                 capture_output=True,
@@ -415,7 +423,7 @@ def _interface_addresses() -> dict[str, str]:
                 return mapping
     for command in (["ip", "-br", "addr"], ["/usr/sbin/ip", "-br", "addr"]):
         try:
-            proc = subprocess.run(
+            proc = _subprocess_run(
                 command,
                 check=False,
                 capture_output=True,
@@ -460,7 +468,7 @@ def _socket_listing_output() -> str:
         if proc is None or proc.returncode != 0:
             return ""
         return proc.stdout
-    proc = subprocess.run(
+    proc = _subprocess_run(
         ["ss", "-ltnpH"],
         check=False,
         capture_output=True,
@@ -474,7 +482,7 @@ def _socket_listing_output() -> str:
     sudo = shutil.which("sudo")
     if sudo is None:
         return stdout
-    sudo_proc = subprocess.run(
+    sudo_proc = _subprocess_run(
         [sudo, "-n", "ss", "-ltnpH"],
         check=False,
         capture_output=True,
@@ -580,7 +588,7 @@ def detect_running_services() -> tuple[str, ...]:
                 )
             )
         )
-    proc = subprocess.run(
+    proc = _subprocess_run(
         ["systemctl", "list-units", "--type=service", "--state=running", "--plain", "--no-legend", "--no-pager"],
         check=False,
         capture_output=True,
@@ -631,7 +639,7 @@ def detect_service_records() -> tuple[tuple[str, str, int | None, str, str], ...
 
     systemctl = shutil.which("systemctl")
     if systemctl is not None:
-        proc = subprocess.run(
+        proc = _subprocess_run(
             [systemctl, "list-units", "--type=service", "--all", "--plain", "--no-legend", "--no-pager"],
             check=False,
             capture_output=True,
@@ -651,7 +659,7 @@ def detect_service_records() -> tuple[tuple[str, str, int | None, str, str], ...
                 state = "running" if active == "active" and sub == "running" else sub or active or "unknown"
                 description = " ".join(parts[4:]).strip()
                 pid: int | None = None
-                show_proc = subprocess.run(
+                show_proc = _subprocess_run(
                     [systemctl, "show", unit, "--property=MainPID", "--value"],
                     check=False,
                     capture_output=True,
@@ -665,7 +673,7 @@ def detect_service_records() -> tuple[tuple[str, str, int | None, str, str], ...
 
     docker = shutil.which("docker")
     if docker is not None:
-        proc = subprocess.run(
+        proc = _subprocess_run(
             [docker, "ps", "-a", "--format", "{{.Names}}\t{{.State}}\t{{.Status}}"],
             check=False,
             capture_output=True,
@@ -1126,7 +1134,7 @@ def control_service(service: str, action: str) -> None:
     systemctl = shutil.which("systemctl")
     if systemctl is not None:
         unit = target if target.endswith(".service") else f"{target}.service"
-        probe = subprocess.run(
+        probe = _subprocess_run(
             [systemctl, "status", unit],
             check=False,
             stdout=subprocess.DEVNULL,
@@ -1134,14 +1142,14 @@ def control_service(service: str, action: str) -> None:
             text=True,
         )
         if probe.returncode in {0, 3, 4}:
-            result = subprocess.run([systemctl, normalized_action, unit], check=False, capture_output=True, text=True)
+            result = _subprocess_run([systemctl, normalized_action, unit], check=False, capture_output=True, text=True)
             if result.returncode != 0:
                 raise RuntimeError(result.stderr.strip() or result.stdout.strip() or f"failed to {normalized_action} {unit}")
             return
 
     docker = shutil.which("docker")
     if docker is not None:
-        probe = subprocess.run(
+        probe = _subprocess_run(
             [docker, "inspect", target],
             check=False,
             stdout=subprocess.DEVNULL,
@@ -1149,7 +1157,7 @@ def control_service(service: str, action: str) -> None:
             text=True,
         )
         if probe.returncode == 0:
-            result = subprocess.run([docker, normalized_action, target], check=False, capture_output=True, text=True)
+            result = _subprocess_run([docker, normalized_action, target], check=False, capture_output=True, text=True)
             if result.returncode != 0:
                 raise RuntimeError(result.stderr.strip() or result.stdout.strip() or f"failed to {normalized_action} {target}")
             return
