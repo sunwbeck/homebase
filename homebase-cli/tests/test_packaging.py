@@ -280,7 +280,7 @@ def test_prepare_windows_self_update_uses_external_python(tmp_path: Path, monkey
     helper_source = helper_path.read_text(encoding="utf-8")
     assert "install_github_ref" in helper_source
     assert "Updating Windows local installation..." in helper_source
-    assert "still running:" in helper_source
+    assert "spinner_frames" in helper_source
 
 
 def test_wait_for_windows_self_update_returns_done_payload(tmp_path: Path) -> None:

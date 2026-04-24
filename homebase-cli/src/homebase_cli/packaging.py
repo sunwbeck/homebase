@@ -173,19 +173,28 @@ def prepare_windows_self_update(
         from homebase_cli.packaging import PackageOperationError, install_github_ref  # noqa: E402
 
         current_stage = [(0, 0, "starting")]
-        last_tick = [time.monotonic()]
+        last_tick = [0.0]
+        spinner_index = [0]
+        spinner_frames = ["|", "/", "-", "\\\\"]
+        spinner_active = [False]
 
         def stage(step, total, label):
+            if spinner_active[0]:
+                print("\\r" + " " * 120 + "\\r", end="", flush=True)
+                spinner_active[0] = False
             current_stage[0] = (step, total, label)
-            last_tick[0] = time.monotonic()
+            last_tick[0] = 0.0
             print(f"[{{step}}/{{total}}] {{label}}", flush=True)
 
         def tick():
             now = time.monotonic()
-            if now - last_tick[0] < 10.0:
+            if now - last_tick[0] < 0.12:
                 return
             step, total, label = current_stage[0]
-            print(f"[{{step}}/{{total}}] still running: {{label}}", flush=True)
+            frame = spinner_frames[spinner_index[0] % len(spinner_frames)]
+            spinner_index[0] += 1
+            spinner_active[0] = True
+            print(f"\\r{{frame}} [{{step}}/{{total}}] {{label}}", end="", flush=True)
             last_tick[0] = now
 
         print("Updating Windows local installation...", flush=True)
@@ -199,13 +208,19 @@ def prepare_windows_self_update(
                 on_tick=tick,
             )
         except PackageOperationError as exc:
+            if spinner_active[0]:
+                print("\\r" + " " * 120 + "\\r", end="", flush=True)
             print("Package install failed.", flush=True)
             print(f"Log: {{exc.log_path}}", flush=True)
             raise SystemExit(1)
         except Exception as exc:
+            if spinner_active[0]:
+                print("\\r" + " " * 120 + "\\r", end="", flush=True)
             print(f"Update failed: {{exc}}", flush=True)
             raise SystemExit(1)
 
+        if spinner_active[0]:
+            print("\\r" + " " * 120 + "\\r", end="", flush=True)
         print(f"Installed version: {{status.installed_version or 'unknown'}}", flush=True)
         print(f"Requested ref: {{status.requested_ref}}", flush=True)
         if status.resolved_ref:
