@@ -592,7 +592,7 @@ def test_status_shows_local_node(monkeypatch) -> None:
         assert "Node status" in status_result.stdout
         assert "control" in status_result.stdout
         assert "controller" in status_result.stdout
-        assert "Exposure" in status_result.stdout
+        assert "Exposure" not in status_result.stdout
         assert "State" not in status_result.stdout
 
 
@@ -639,8 +639,7 @@ def test_managed_status_shows_self_and_paired_controllers(monkeypatch) -> None:
         assert "192.168.0.20" in result.stdout
         assert "control" in result.stdout
         assert "192.168.0.10" in result.stdout
-        assert "ssh:22" in result.stdout
-        assert "homebase:8428" in result.stdout
+        assert "Exposure" not in result.stdout
         assert "State" not in result.stdout
 
 

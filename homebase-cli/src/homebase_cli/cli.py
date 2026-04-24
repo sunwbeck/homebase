@@ -960,7 +960,6 @@ def _print_registered_overview() -> None:
     table.add_column("Hostname")
     table.add_column("OS")
     table.add_column("Client")
-    table.add_column("Exposure")
     table.add_column("Groups")
     if not nodes:
         console.print("registered nodes: none")
@@ -974,7 +973,6 @@ def _print_registered_overview() -> None:
             snapshot["hostname"],
             snapshot["platform"],
             _node_client_state(node.name, snapshot),
-            _format_exposure_summary(snapshot["endpoints"]),
             ", ".join(node.role_groups) if node.role_groups else "",
         )
     console.print(table)
@@ -994,7 +992,6 @@ def _print_managed_overview() -> None:
     table.add_column("Hostname")
     table.add_column("OS")
     table.add_column("Client")
-    table.add_column("Exposure")
     table.add_row(
         f"{local_name} (local)",
         _current_runtime_role() or "managed",
@@ -1002,7 +999,6 @@ def _print_managed_overview() -> None:
         snapshot["hostname"],
         snapshot["platform"],
         "running" if runtime is not None else "stopped",
-        _format_exposure_summary(snapshot["endpoints"]),
     )
     for controller in state.paired_controllers:
         table.add_row(
@@ -1010,7 +1006,6 @@ def _print_managed_overview() -> None:
             "controller",
             controller.address or "",
             controller.hostname or "",
-            "",
             "",
             "",
         )
