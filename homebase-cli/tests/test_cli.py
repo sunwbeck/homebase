@@ -733,6 +733,21 @@ def test_background_process_kwargs_use_new_session_on_posix(monkeypatch) -> None
     assert kwargs == {"start_new_session": True}
 
 
+def test_background_python_executable_prefers_pythonw_on_windows(monkeypatch) -> None:
+    module = load_module(monkeypatch)
+    monkeypatch.setattr("homebase_cli.cli.os.name", "nt")
+    monkeypatch.setattr("homebase_cli.cli.sys.executable", r"C:\Python313\python.exe")
+    monkeypatch.setattr("homebase_cli.cli.Path.exists", lambda self: str(self).lower().endswith("pythonw.exe"))
+    assert module._background_python_executable() == r"C:\Python313\pythonw.exe"
+
+
+def test_background_python_executable_keeps_current_interpreter_elsewhere(monkeypatch) -> None:
+    module = load_module(monkeypatch)
+    monkeypatch.setattr("homebase_cli.cli.os.name", "posix")
+    monkeypatch.setattr("homebase_cli.cli.sys.executable", "/usr/bin/python3")
+    assert module._background_python_executable() == "/usr/bin/python3"
+
+
 def test_connect_code_always_refreshes_and_shows_expiry(monkeypatch) -> None:
     runner = CliRunner()
     with runner.isolated_filesystem():

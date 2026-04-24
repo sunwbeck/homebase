@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 import json
+import ntpath
 import os
 from pathlib import Path
 import secrets
@@ -1564,13 +1565,25 @@ def _background_process_kwargs() -> dict[str, object]:
     return kwargs
 
 
+def _background_python_executable() -> str:
+    """Return the interpreter path to use for detached background work."""
+    if os.name != "nt":
+        return sys.executable
+    current = str(sys.executable)
+    if ntpath.basename(current).lower() == "python.exe":
+        candidate = ntpath.join(ntpath.dirname(current), "pythonw.exe")
+        if Path(candidate).exists():
+            return candidate
+    return sys.executable
+
+
 def _start_daemon_background(*, host: str, port: int, current_role: str) -> None:
     """Start the local daemon in the background and print the result."""
     CONNECT_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
     log_handle = CONNECT_LOG_PATH.open("a", encoding="utf-8")
     env = os.environ.copy()
     command = [
-        sys.executable,
+        _background_python_executable(),
         "-m",
         "homebase_cli.cli",
         "daemon",
