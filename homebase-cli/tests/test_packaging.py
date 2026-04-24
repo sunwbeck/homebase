@@ -269,15 +269,18 @@ def test_prepare_windows_self_update_uses_external_python(tmp_path: Path, monkey
     monkeypatch.setattr("homebase_cli.packaging.Path.home", lambda: tmp_path)
     monkeypatch.setattr("homebase_cli.packaging.sys.executable", str(tmp_path / "venv" / "Scripts" / "python.exe"))
     monkeypatch.setattr("homebase_cli.packaging.shutil.which", lambda name: r"C:\Windows\py.exe" if name == "py" else None)
+    monkeypatch.setenv("COMSPEC", r"C:\Windows\System32\cmd.exe")
 
     command, helper_path = prepare_windows_self_update("main")
 
-    assert command[:2] == [r"C:\Windows\py.exe", "-3"]
-    assert command[2] == str(helper_path)
+    assert command[:3] == [r"C:\Windows\System32\cmd.exe", "/d", "/c"]
+    assert r"C:\Windows\py.exe" in command[3]
+    assert str(helper_path) in command[3]
     assert helper_path.exists()
     helper_source = helper_path.read_text(encoding="utf-8")
     assert "install_github_ref" in helper_source
     assert "Updating Windows local installation..." in helper_source
+    assert "still running:" in helper_source
 
 
 def test_wait_for_windows_self_update_returns_done_payload(tmp_path: Path) -> None:

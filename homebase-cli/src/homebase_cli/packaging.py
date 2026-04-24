@@ -168,11 +168,25 @@ def prepare_windows_self_update(
     helper_source = textwrap.dedent(
         f"""
         import sys
+        import time
         sys.path.insert(0, {str(package_root)!r})
         from homebase_cli.packaging import PackageOperationError, install_github_ref  # noqa: E402
 
+        current_stage = [(0, 0, "starting")]
+        last_tick = [time.monotonic()]
+
         def stage(step, total, label):
+            current_stage[0] = (step, total, label)
+            last_tick[0] = time.monotonic()
             print(f"[{{step}}/{{total}}] {{label}}", flush=True)
+
+        def tick():
+            now = time.monotonic()
+            if now - last_tick[0] < 2.0:
+                return
+            step, total, label = current_stage[0]
+            print(f"[{{step}}/{{total}}] still running: {{label}}", flush=True)
+            last_tick[0] = now
 
         print("Updating Windows local installation...", flush=True)
         try:
@@ -182,6 +196,7 @@ def prepare_windows_self_update(
                 python_bin={interpreter!r},
                 summary={summary!r},
                 on_stage=stage,
+                on_tick=tick,
             )
         except PackageOperationError as exc:
             print("Package install failed.", flush=True)
@@ -198,7 +213,9 @@ def prepare_windows_self_update(
         """
     ).strip() + "\n"
     helper_path.write_text(helper_source, encoding="utf-8")
-    return [*helper_command, str(helper_path)], helper_path
+    helper_invocation = [*helper_command, str(helper_path)]
+    shell = os.environ.get("COMSPEC", "cmd.exe")
+    return [shell, "/d", "/c", subprocess.list2cmdline(helper_invocation)], helper_path
 
 
 def schedule_windows_self_update(
