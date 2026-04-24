@@ -15,6 +15,7 @@ from homebase_cli.packaging import (
     save_install_state,
     installed_version,
 )
+from homebase_cli import packaging
 
 
 def test_install_command_uses_tarball_install_flow() -> None:
@@ -165,3 +166,56 @@ def test_installed_version_falls_back_to_pip_show_for_python_bin(monkeypatch) ->
     monkeypatch.setattr("homebase_cli.packaging.subprocess.run", fake_run)
     assert installed_version("/tmp/fake-python") == "0.1.2"
     assert calls[1] == ["/tmp/fake-python", "-m", "pip", "show", "homebase-cli"]
+
+
+def test_refresh_windows_command_shims_creates_cmd_wrappers(tmp_path: Path, monkeypatch) -> None:
+    scripts_dir = tmp_path / "venv" / "Scripts"
+    scripts_dir.mkdir(parents=True)
+    (scripts_dir / "python.exe").write_text("", encoding="ascii")
+    (scripts_dir / "homebase.exe").write_text("", encoding="ascii")
+    (scripts_dir / "hb.exe").write_text("", encoding="ascii")
+    monkeypatch.setattr("homebase_cli.packaging.platform.system", lambda: "Windows")
+    monkeypatch.setattr("homebase_cli.packaging.Path.home", lambda: tmp_path)
+
+    packaging._refresh_windows_command_shims(str(scripts_dir / "python.exe"))
+
+    homebase_cmd = (tmp_path / ".local" / "bin" / "homebase.cmd").read_text(encoding="ascii")
+    hb_cmd = (tmp_path / ".local" / "bin" / "hb.cmd").read_text(encoding="ascii")
+    assert '"{}" %*'.format(scripts_dir / "homebase.exe") in homebase_cmd
+    assert '"{}" %*'.format(scripts_dir / "hb.exe") in hb_cmd
+
+
+def test_install_github_ref_refreshes_windows_shims(tmp_path: Path, monkeypatch) -> None:
+    install_root = tmp_path / "source" / "homebase-cli"
+    install_root.mkdir(parents=True)
+    holder = SimpleNamespace(cleanup=lambda: None)
+    seen = {}
+    monkeypatch.setattr("homebase_cli.packaging.platform.system", lambda: "Windows")
+    monkeypatch.setattr("homebase_cli.packaging.Path.home", lambda: tmp_path)
+    monkeypatch.setattr("homebase_cli.packaging._prepare_install_source", lambda repo_url, ref: (holder, install_root))
+    monkeypatch.setattr(
+        "homebase_cli.packaging._run_logged",
+        lambda args, cwd, log_prefix, on_tick=None: SimpleNamespace(
+            returncode=0,
+            stdout="",
+            stderr="",
+            log_path=tmp_path / "install.log",
+        ),
+    )
+    monkeypatch.setattr("homebase_cli.packaging.installed_version", lambda python_bin=None: "0.2.0")
+    monkeypatch.setattr("homebase_cli.packaging.resolve_github_ref", lambda repo_url, ref: "abc123")
+    monkeypatch.setattr(
+        "homebase_cli.packaging.save_install_state",
+        lambda status, path=packaging.INSTALL_STATE_PATH: seen.setdefault("status", status),
+    )
+    scripts_dir = tmp_path / "venv" / "Scripts"
+    scripts_dir.mkdir(parents=True)
+    (scripts_dir / "python.exe").write_text("", encoding="ascii")
+    (scripts_dir / "homebase.exe").write_text("", encoding="ascii")
+    (scripts_dir / "hb.exe").write_text("", encoding="ascii")
+
+    packaging.install_github_ref("main", python_bin=str(scripts_dir / "python.exe"))
+
+    assert (tmp_path / ".local" / "bin" / "homebase.cmd").exists()
+    assert (tmp_path / ".local" / "bin" / "hb.cmd").exists()
+    assert seen["status"].resolved_ref == "abc123"

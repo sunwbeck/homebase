@@ -14,19 +14,35 @@ What it does:
 
 ## Install
 
-First install:
+Linux/macOS first install:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/sunwbeck/homebase/main/scripts/install-homebase.sh | bash
 ```
 
-Install a specific ref:
+Linux/macOS install a specific ref:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/sunwbeck/homebase/main/scripts/install-homebase.sh | bash -s -- --ref main
 ```
 
-The installer sets up `homebase` for the current user and makes `homebase` and `hb` available from `~/.local/bin`.
+Windows 11 PowerShell first install:
+
+```powershell
+irm https://raw.githubusercontent.com/sunwbeck/homebase/main/scripts/install-homebase.ps1 | iex
+```
+
+Windows 11 PowerShell install a specific ref:
+
+```powershell
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/sunwbeck/homebase/main/scripts/install-homebase.ps1))) -Ref main
+```
+
+The Bash installer sets up `homebase` for the current user and makes `homebase` and `hb` available from `~/.local/bin`.
+
+The PowerShell installer creates a Python virtual environment under `~/.local/share/homebase-cli/.venv`, writes `homebase.cmd` and `hb.cmd` shims to `~/.local/bin`, and adds that directory to the user `PATH`.
+
+If you run the Bash command in PowerShell, `curl` is usually an alias for `Invoke-WebRequest`, so `curl -fsSL ... | bash` fails there. Use the PowerShell command above, or run the Bash installer from Git Bash or WSL instead.
 
 On first run, `homebase` or `hb` starts `homebase init` automatically if the local node role or node name has not been set yet.
 
@@ -147,6 +163,7 @@ homebase inventory edit
 - `docs/`: system and CLI planning documents
 - `homebase-cli/`: Python package source, tests, and CLI code
 - `scripts/install-homebase.sh`: install script used by the one-line bootstrap command
+- `scripts/install-homebase.ps1`: PowerShell install script for Windows 11
 
 ## Docs
 

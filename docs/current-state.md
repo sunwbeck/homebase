@@ -14,6 +14,7 @@ Current implementation direction:
 - `homebase package` can now inspect or roll GitHub refs across the local node, selected nodes, selected groups, or the whole registered fleet
 - repo-local docs are updated with the code, rather than keeping a separate NAS docs root
 - managed nodes now have basic Windows profile and service support in addition to Linux
+- Windows local install now has a PowerShell bootstrap path, and package install or update refreshes Windows command shims after pip-based upgrades
 
 Current runtime naming:
 

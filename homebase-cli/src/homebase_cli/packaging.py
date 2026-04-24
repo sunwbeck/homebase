@@ -8,6 +8,7 @@ from pathlib import Path
 import importlib.metadata
 import json
 import os
+import platform
 import re
 import shlex
 import shutil
@@ -76,6 +77,34 @@ class InstalledPackageStatus:
     resolved_ref: str | None
     summary: str | None
     installed_at: str | None
+
+
+def _is_windows() -> bool:
+    """Return whether the current runtime is Windows."""
+    return platform.system().lower() == "windows"
+
+
+def _user_bin_dir() -> Path:
+    """Return the directory used for user-visible command shims."""
+    return Path.home() / ".local" / "bin"
+
+
+def _refresh_windows_command_shims(interpreter: str) -> None:
+    """Ensure Windows command shims continue to point at the current venv."""
+    if not _is_windows():
+        return
+    script_dir = Path(interpreter).resolve().parent
+    targets = {
+        "homebase": script_dir / "homebase.exe",
+        "hb": script_dir / "hb.exe",
+    }
+    if not all(target.exists() for target in targets.values()):
+        return
+    user_bin = _user_bin_dir()
+    user_bin.mkdir(parents=True, exist_ok=True)
+    for name, target in targets.items():
+        shim_path = user_bin / f"{name}.cmd"
+        shim_path.write_text(f'@echo off\n"{target}" %*\n', encoding="ascii")
 
 
 def _new_log_path(prefix: str) -> Path:
@@ -465,6 +494,7 @@ def install_github_ref(
         source_dir_holder.cleanup()
     if result.returncode != 0:
         raise PackageOperationError("install failed", result.log_path)
+    _refresh_windows_command_shims(interpreter)
     status = InstalledPackageStatus(
         installed_version=installed_version(interpreter),
         repo_url=_normalize_repo_url(repo_url),
