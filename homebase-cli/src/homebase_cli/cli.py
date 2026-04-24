@@ -25,6 +25,7 @@ from rich.text import Text
 from rich.table import Table
 
 from homebase_cli.client import (
+    ClientProfile,
     ConnectRuntime,
     CONNECT_LOG_PATH,
     DEFAULT_CLIENT_PORT,
@@ -84,6 +85,7 @@ from homebase_cli.registry import (
 from homebase_cli.resources import all_resources, child_resources, find_resource
 from homebase_cli.scanner import (
     detect_scannable_networks,
+    fetch_discovery,
     fetch_package_progress,
     fetch_package_status,
     fetch_profile,
@@ -185,10 +187,10 @@ def _node_client_state(node_name: str, snapshot: dict[str, object]) -> str:
     current_name = _current_node_name()
     if current_name and current_name == node_name:
         return "running" if connect_server_running() is not None else "stopped"
-    if snapshot.get("profile_reachable"):
-        return "reachable"
+    if snapshot.get("client_running"):
+        return "running"
     if snapshot.get("configured_client"):
-        return "no response"
+        return "stopped"
     return ""
 
 
@@ -204,6 +206,41 @@ def _format_exposure_summary(endpoints: Sequence[tuple[int, str, str | None]]) -
     if not endpoints:
         return ""
     return ", ".join(f"{purpose}:{port}" for port, purpose, _ in endpoints)
+
+
+def _normalize_endpoint_entry(
+    port: int,
+    purpose: str,
+    owner: str | None,
+    pid: int | None = None,
+) -> tuple[int, str, str | None, int | None]:
+    """Normalize one endpoint label for display and matching."""
+    normalized_owner = (owner or "").strip() or None
+    normalized_purpose = purpose.strip()
+    fallback_label = describe_port(port, normalized_owner or normalized_purpose or None)
+    if not normalized_purpose or normalized_purpose == str(port):
+        normalized_purpose = fallback_label
+    elif port == DEFAULT_CLIENT_PORT:
+        normalized_purpose = fallback_label
+    return (port, normalized_purpose, normalized_owner, pid)
+
+
+def _profile_has_runtime_data(profile) -> bool:
+    """Return whether one fetched profile includes runtime details."""
+    return any(
+        (
+            profile.open_ports,
+            profile.services,
+            profile.exposed_endpoints,
+            profile.endpoint_records,
+            profile.service_records,
+        )
+    )
+
+
+def _node_value(node, field: str, default=None):
+    """Return one node attribute from dataclasses or test doubles."""
+    return getattr(node, field, default)
 
 
 def _format_endpoint_ports(endpoints: Sequence[tuple[int, str, str | None]]) -> str:
@@ -311,41 +348,125 @@ def _service_row_matches_terms(
 def _node_runtime_snapshot(node):
     """Return one normalized runtime snapshot for a node."""
     local_name = _current_node_name()
-    is_local = bool(local_name and node.name == local_name)
+    is_local = bool(local_name and _node_value(node, "name") == local_name)
     profile = None
+    client_running = False
     if is_local:
         try:
             profile = local_profile()
+            client_running = True
         except Exception:
             profile = None
-    if not is_local and node.address and node.client_port:
+    node_address = _node_value(node, "address")
+    node_client_port = _node_value(node, "client_port")
+    node_open_ports = tuple(_node_value(node, "open_ports", ()) or ())
+    node_services = tuple(_node_value(node, "services", ()) or ())
+    node_exposed_endpoints = tuple(_node_value(node, "exposed_endpoints", ()) or ())
+    node_endpoint_records = tuple(_node_value(node, "endpoint_records", ()) or ())
+    node_service_records = tuple(_node_value(node, "service_records", ()) or ())
+    node_runtime_hostname = _node_value(node, "runtime_hostname")
+    node_platform = _node_value(node, "platform")
+    if not is_local and node_address and node_client_port:
         try:
-            profile = fetch_profile(node.address, port=node.client_port)
+            profile = fetch_profile(node_address, port=node_client_port)
+            client_running = profile is not None
         except Exception:
             profile = None
-    endpoints = tuple(profile.exposed_endpoints) if profile is not None else (
-        node.exposed_endpoints or tuple((port, describe_port(port), None) for port in node.open_ports)
+        if profile is None:
+            try:
+                client_running = fetch_discovery(node_address, port=node_client_port) is not None
+            except Exception:
+                client_running = False
+    if is_local and profile is not None and not profile.exposed_endpoints:
+        live_endpoints = tuple(detect_exposed_endpoints())
+        if live_endpoints:
+            profile = ClientProfile(
+                node_id=profile.node_id,
+                node_name=profile.node_name,
+                hostname=profile.hostname,
+                platform=profile.platform,
+                version=profile.version,
+                description=profile.description,
+                open_ports=tuple(port for port, _, _ in live_endpoints),
+                services=profile.services,
+                exposed_endpoints=live_endpoints,
+                endpoint_records=profile.endpoint_records,
+                service_records=profile.service_records,
+            )
+    if is_local and profile is not None and not profile.service_records:
+        live_service_records = tuple(detect_service_records())
+        live_services = tuple(
+            dict.fromkeys(name for name, state, _, _, _ in live_service_records if state == "running")
+        )
+        if live_service_records:
+            profile = ClientProfile(
+                node_id=profile.node_id,
+                node_name=profile.node_name,
+                hostname=profile.hostname,
+                platform=profile.platform,
+                version=profile.version,
+                description=profile.description,
+                open_ports=profile.open_ports,
+                services=live_services or profile.services,
+                exposed_endpoints=profile.exposed_endpoints,
+                endpoint_records=profile.endpoint_records,
+                service_records=live_service_records,
+            )
+    use_live_runtime = profile is not None and (_profile_has_runtime_data(profile) or not any(
+        (node_open_ports, node_services, node_exposed_endpoints, node_endpoint_records, node_service_records)
+    ))
+    raw_endpoints = tuple(profile.exposed_endpoints) if use_live_runtime and profile is not None else (
+        node_exposed_endpoints or tuple((port, describe_port(port), None) for port in node_open_ports)
     )
-    endpoint_records = tuple(profile.endpoint_records) if profile is not None else (
-        node.endpoint_records or tuple((port, purpose, owner, None) for port, purpose, owner in endpoints)
+    raw_endpoint_records = tuple(profile.endpoint_records) if use_live_runtime and profile is not None else (
+        node_endpoint_records or tuple((port, purpose, owner, None) for port, purpose, owner in raw_endpoints)
     )
-    services = tuple(profile.services) if profile is not None else node.services
+    endpoint_records = tuple(
+        sorted(
+            (
+                _normalize_endpoint_entry(port, purpose, owner, pid)
+                for port, purpose, owner, pid in raw_endpoint_records
+            ),
+            key=lambda item: (item[0], item[3] or -1),
+        )
+    )
+    endpoints = tuple(
+        sorted(
+            dict.fromkeys(
+                (
+                    (port, purpose, owner)
+                    for port, purpose, owner, _ in endpoint_records
+                )
+            ),
+            key=lambda item: item[0],
+        )
+    ) if endpoint_records else tuple(
+        sorted(
+            (
+                _normalize_endpoint_entry(port, purpose, owner)[:3]
+                for port, purpose, owner in raw_endpoints
+            ),
+            key=lambda item: item[0],
+        )
+    )
+    services = tuple(profile.services) if use_live_runtime and profile is not None else node_services
     all_services = tuple(detect_running_services()) if is_local else services
-    service_records = tuple(profile.service_records) if profile is not None else (
-        node.service_records or tuple((service, "running", None, "service", "") for service in services)
+    service_records = tuple(profile.service_records) if use_live_runtime and profile is not None else (
+        node_service_records or tuple((service, "running", None, "service", "") for service in services)
     )
     return {
-        "address": node.address or (detect_primary_address() if is_local else None) or "",
-        "hostname": node.runtime_hostname or (profile.hostname if profile is not None else "") or "",
-        "platform": node.platform or (profile.platform if profile is not None else "") or "",
+        "address": node_address or (detect_primary_address() if is_local else None) or "",
+        "hostname": node_runtime_hostname or (profile.hostname if profile is not None else "") or "",
+        "platform": node_platform or (profile.platform if profile is not None else "") or "",
         "services": services,
         "all_services": all_services,
         "service_records": service_records,
         "endpoints": endpoints,
         "endpoint_records": endpoint_records,
         "is_local": is_local,
+        "client_running": client_running,
         "profile_reachable": profile is not None,
-        "configured_client": bool(node.address and node.client_port),
+        "configured_client": bool(node_address and node_client_port),
     }
 
 
@@ -781,7 +902,7 @@ def _show_node_details(node_name: str) -> None:
     runtime.add_column("Value")
     runtime.add_row("hostname", snapshot["hostname"])
     runtime.add_row("os", snapshot["platform"])
-    runtime.add_row("service", _node_service_state(node.name))
+    runtime.add_row("client", _node_client_state(node.name, snapshot))
     runtime.add_row("external services", ", ".join(snapshot["services"]))
     runtime.add_row("all services", ", ".join(snapshot["all_services"]))
     runtime.add_row("groups", ", ".join(node.role_groups) if node.role_groups else "")
@@ -1070,9 +1191,12 @@ def _resolve_profile_for_node(selected: DiscoveredNode, client_port: int) -> obj
     if len(pair_code) != 8 or not pair_code.isdigit():
         raise typer.BadParameter("pairing code must be exactly 8 digits")
     try:
-        return pair_with_client(selected.address, pair_code, port=client_port)
+        profile = pair_with_client(selected.address, pair_code, port=client_port)
     except PairingError as exc:
         raise typer.BadParameter(f"pairing failed: {exc}") from exc
+    if profile is None:
+        raise typer.BadParameter("pairing failed")
+    return profile
 
 
 @connect_app.command("scan")

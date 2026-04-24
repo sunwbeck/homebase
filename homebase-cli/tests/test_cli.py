@@ -10,6 +10,7 @@ from typer.testing import CliRunner
 
 from homebase_cli import cli as cli_module
 from homebase_cli.client import ClientProfile, ClientState, ConnectRuntime, PairedController
+from homebase_cli.registry import Node
 from homebase_cli.scanner import ClientDiscovery, DiscoveredNode
 from homebase_cli.selftest import SelfTestResult
 
@@ -22,6 +23,75 @@ def load_app(monkeypatch, settings_path: str | None = None):
 def load_module(monkeypatch, settings_path: str | None = None):
     monkeypatch.setenv("HOMEBASE_SETTINGS_PATH", settings_path or ".homebase-test-settings.toml")
     return importlib.reload(cli_module)
+
+
+def test_node_client_state_uses_running_and_stopped_for_remote(monkeypatch) -> None:
+    module = load_module(monkeypatch)
+    monkeypatch.setattr("homebase_cli.cli._current_node_name", lambda: "control")
+    assert module._node_client_state("workstation", {"client_running": True, "configured_client": True}) == "running"
+    assert module._node_client_state("workstation", {"client_running": False, "configured_client": True}) == "stopped"
+
+
+def test_node_runtime_snapshot_falls_back_to_registry_when_live_profile_is_empty(monkeypatch) -> None:
+    module = load_module(monkeypatch)
+    node = Node(
+        name="workstation",
+        runtime_role="managed",
+        address="192.168.219.126",
+        runtime_hostname="DESKTOP-SB",
+        platform="Windows 11",
+        client_port=8428,
+        open_ports=(8428, 47984),
+        services=("Tailscale", "TermService"),
+        exposed_endpoints=((8428, "8428", None), (47984, "sunshine", "sunshine")),
+        endpoint_records=((8428, "python", "python", 35200), (47984, "sunshine", "sunshine", 10592)),
+        service_records=(("Tailscale", "running", 6952, "windows-service", "Tailscale"),),
+    )
+    monkeypatch.setattr("homebase_cli.cli._current_node_name", lambda: "control")
+    monkeypatch.setattr(
+        "homebase_cli.cli.fetch_profile",
+        lambda address, port=8428: ClientProfile(
+            node_id="DESKTOP-SB",
+            node_name="workstation",
+            hostname="DESKTOP-SB",
+            platform="Windows 11",
+            version="0.1.46",
+            description="workstation",
+            open_ports=(),
+            services=(),
+            exposed_endpoints=(),
+            endpoint_records=(),
+            service_records=(),
+        ),
+    )
+    snapshot = module._node_runtime_snapshot(node)
+    assert snapshot["profile_reachable"] is True
+    assert snapshot["service_records"] == (("Tailscale", "running", 6952, "windows-service", "Tailscale"),)
+    assert snapshot["endpoints"][0] == (8428, "homebase", "python")
+
+
+def test_node_runtime_snapshot_normalizes_homebase_endpoint_label(monkeypatch) -> None:
+    module = load_module(monkeypatch)
+    node = Node(name="host", runtime_role="managed", address="192.168.219.104", client_port=8428)
+    monkeypatch.setattr("homebase_cli.cli._current_node_name", lambda: "control")
+    monkeypatch.setattr(
+        "homebase_cli.cli.fetch_profile",
+        lambda address, port=8428: ClientProfile(
+            node_id="host",
+            node_name="host",
+            hostname="pve",
+            platform="Linux",
+            version="0.1.46",
+            description="host",
+            open_ports=(8428,),
+            services=("homebase",),
+            exposed_endpoints=((8428, "python", "python"),),
+            endpoint_records=((8428, "python", "python", 1234),),
+            service_records=(("homebase", "running", 1234, "service", "homebase daemon"),),
+        ),
+    )
+    snapshot = module._node_runtime_snapshot(node)
+    assert snapshot["endpoints"] == ((8428, "homebase", "python"),)
 
 
 def test_connect_scan_updates_discovery_cache(monkeypatch) -> None:
