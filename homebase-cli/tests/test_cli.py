@@ -801,6 +801,7 @@ def test_service_list_shows_local_services(monkeypatch) -> None:
         result = runner.invoke(app, ["service", "list"], env=env)
         assert result.exit_code == 0
         assert "Service" in result.stdout
+        assert "Kind" in result.stdout
         assert "State" in result.stdout
         assert "PID" in result.stdout
         assert "Ports" in result.stdout
@@ -812,6 +813,7 @@ def test_service_list_shows_local_services(monkeypatch) -> None:
         assert "22" in result.stdout
         assert "OpenSSH server" in result.stdout
         assert "homebase" in result.stdout
+        assert "endpoint" in result.stdout
         assert "listening" in result.stdout
 
 
@@ -915,6 +917,44 @@ def test_service_list_marks_nodes_without_endpoints(monkeypatch) -> None:
         result = runner.invoke(app, ["service", "list"], env=env)
         assert result.exit_code == 0
         assert "none" in result.stdout
+
+
+def test_service_list_labels_numeric_endpoints_as_tcp_listeners(monkeypatch) -> None:
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        env = {"HOMEBASE_SETTINGS_PATH": "settings.toml", "COLUMNS": "240"}
+        Path("settings.toml").write_text('role = "managed"\nnode_name = "app"\n', encoding="utf-8")
+        app = load_app(monkeypatch, "settings.toml")
+        monkeypatch.setattr(
+            "homebase_cli.cli.find_node",
+            lambda name: SimpleNamespace(
+                name="app",
+                address="192.168.0.20",
+                runtime_hostname="app",
+                platform="Linux 6.1",
+                open_ports=(5000,),
+                services=(),
+                exposed_endpoints=((5000, "5000", None),),
+                endpoint_records=((5000, "5000", None, None),),
+                service_records=(),
+            ),
+        )
+        monkeypatch.setattr(
+            "homebase_cli.cli.local_profile",
+            lambda: ClientProfile(
+                node_id="node-1",
+                node_name="app",
+                hostname="app",
+                platform="Linux 6.1",
+                version="0.1.8",
+                endpoint_records=((5000, "5000", None, None),),
+            ),
+        )
+        result = runner.invoke(app, ["service", "list"], env=env)
+        assert result.exit_code == 0
+        assert "tcp/5000" in result.stdout
+        assert "Open TCP listener" in result.stdout
+        assert "endpoint" in result.stdout
 
 
 def test_service_show_uses_runtime_address(monkeypatch) -> None:

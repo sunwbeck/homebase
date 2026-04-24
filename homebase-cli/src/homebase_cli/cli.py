@@ -306,13 +306,19 @@ def _service_rows(snapshot: dict[str, object]) -> list[dict[str, object]]:
         if endpoint in matched_endpoints:
             continue
         port, purpose, owner, pid = endpoint
+        endpoint_name = purpose if purpose and purpose != str(port) else (owner or f"tcp/{port}")
+        endpoint_description = owner or ""
+        if purpose and purpose != str(port):
+            endpoint_description = f"{purpose}{f' ({owner})' if owner else ''}"
+        elif not endpoint_description:
+            endpoint_description = "Open TCP listener"
         rows.append(
             {
-                "name": purpose,
+                "name": endpoint_name,
                 "state": "listening",
                 "pid": pid,
                 "kind": "endpoint",
-                "description": owner or "",
+                "description": endpoint_description,
                 "endpoints": ((port, purpose, owner),),
             }
         )
@@ -1760,6 +1766,7 @@ def service_list_command(
         table.add_column("Node")
         table.add_column("Address")
         table.add_column("Service")
+        table.add_column("Kind")
         table.add_column("State")
         table.add_column("PID")
         table.add_column("Ports")
@@ -1767,13 +1774,14 @@ def service_list_command(
         snapshot = _node_runtime_snapshot(local_node)
         rows = _service_rows(snapshot)
         if not rows:
-            table.add_row(_node_label(local_node.name), snapshot["address"], "none", "", "", "", "")
+            table.add_row(_node_label(local_node.name), snapshot["address"], "none", "", "", "", "", "")
         else:
             for row in rows:
                 table.add_row(
                     _node_label(local_node.name),
                     snapshot["address"],
                     str(row["name"]),
+                    str(row["kind"]),
                     str(row["state"]),
                     str(row["pid"] or ""),
                     _format_endpoint_ports(tuple(row["endpoints"])),
@@ -1797,6 +1805,7 @@ def service_list_command(
     table.add_column("Node")
     table.add_column("Address")
     table.add_column("Service")
+    table.add_column("Kind")
     table.add_column("State")
     table.add_column("PID")
     table.add_column("Ports")
@@ -1807,13 +1816,14 @@ def service_list_command(
         rows = _service_rows(snapshot)
         groups_value = ", ".join(node.role_groups) if node.role_groups else ""
         if not rows:
-            table.add_row(_node_label(node.name), snapshot["address"], "none", "", "", "", "", groups_value)
+            table.add_row(_node_label(node.name), snapshot["address"], "none", "", "", "", "", "", groups_value)
             continue
         for row in rows:
             table.add_row(
                 _node_label(node.name),
                 snapshot["address"],
                 str(row["name"]),
+                str(row["kind"]),
                 str(row["state"]),
                 str(row["pid"] or ""),
                 _format_endpoint_ports(tuple(row["endpoints"])),
@@ -1889,6 +1899,7 @@ def service_search_command(
     table.add_column("Node")
     table.add_column("Address")
     table.add_column("Service")
+    table.add_column("Kind")
     table.add_column("State")
     table.add_column("PID")
     table.add_column("Ports")
@@ -1911,6 +1922,7 @@ def service_search_command(
                 _node_label(node.name),
                 snapshot["address"],
                 str(row["name"]),
+                str(row["kind"]),
                 str(row["state"]),
                 str(row["pid"] or ""),
                 _format_endpoint_ports(tuple(row["endpoints"])),
