@@ -1,4 +1,5 @@
 from datetime import UTC, datetime, timedelta
+import io
 import json
 from pathlib import Path
 import subprocess
@@ -6,6 +7,8 @@ from types import SimpleNamespace
 
 from homebase_cli.client import (
     ClientState,
+    PAIR_PATH,
+    PROFILE_PATH,
     PackageInstallRequest,
     PairRequest,
     control_service,
@@ -21,6 +24,7 @@ from homebase_cli.client import (
     parse_pair_request,
     parse_profile_payload,
     paired_profile_payload,
+    make_handler,
     normalize_pair_code,
     pairing_rejection_reason,
     save_package_job_state,
@@ -61,6 +65,25 @@ def test_parse_profile_payload_includes_ports_and_services() -> None:
     assert profile.services == ("ssh", "docker")
 
 
+def test_parse_profile_payload_accepts_legacy_tuple_endpoints() -> None:
+    profile = parse_profile_payload(
+        {
+            "node_id": "abc123",
+            "node_name": "app",
+            "hostname": "app",
+            "platform": "Linux 6.1",
+            "version": "0.1.0",
+            "open_ports": [8428],
+            "exposed_endpoints": [[8428, "homebase", "python"]],
+            "endpoint_records": [[8428, "homebase", "python", 1010]],
+            "service_records": [["homebase", "running", 1010, "service", "homebase daemon"]],
+        }
+    )
+    assert profile.exposed_endpoints == ((8428, "homebase", "python"),)
+    assert profile.endpoint_records == ((8428, "homebase", "python", 1010),)
+    assert profile.service_records == (("homebase", "running", 1010, "service", "homebase daemon"),)
+
+
 def test_paired_profile_payload_is_lightweight(monkeypatch) -> None:
     monkeypatch.setattr(
         "homebase_cli.client.local_discovery",
@@ -75,6 +98,86 @@ def test_paired_profile_payload_is_lightweight(monkeypatch) -> None:
     )
     payload = paired_profile_payload()
     assert payload["node_id"] == "abc123"
+    assert payload["open_ports"] == []
+    assert payload["service_records"] == []
+
+
+def test_profile_route_returns_full_profile_for_paired_controller(monkeypatch) -> None:
+    monkeypatch.setattr("homebase_cli.client.is_paired", lambda controller_id: controller_id == "control")
+    monkeypatch.setattr(
+        "homebase_cli.client.local_profile",
+        lambda: parse_profile_payload(
+            {
+                "node_id": "abc123",
+                "node_name": "workstation",
+                "hostname": "DESKTOP-SB",
+                "platform": "Windows 11",
+                "version": "0.1.0",
+                "description": "daily workstation",
+                "open_ports": [8428],
+                "services": ["homebase"],
+                "exposed_endpoints": [{"port": 8428, "purpose": "homebase", "owner": "python"}],
+                "endpoint_records": [{"port": 8428, "purpose": "homebase", "owner": "python", "pid": 1010}],
+                "service_records": [
+                    {
+                        "name": "homebase",
+                        "state": "running",
+                        "pid": 1010,
+                        "kind": "service",
+                        "description": "homebase daemon",
+                    }
+                ],
+            }
+        ),
+    )
+    handler_type = make_handler()
+    handler = handler_type.__new__(handler_type)
+    handler.path = PROFILE_PATH
+    handler.headers = {"X-Homebase-Controller": "control"}
+    captured: dict[str, object] = {}
+    handler._send_json = lambda payload, status=200: captured.update(payload=payload, status=status)
+    handler.send_error = lambda status, message: captured.update(error=(status, message))
+    handler.do_GET()
+    assert captured["status"] == 200
+    payload = captured["payload"]
+    assert payload["open_ports"] == (8428,)
+    assert payload["service_records"][0]["name"] == "homebase"
+
+
+def test_pair_route_returns_lightweight_profile_after_success(monkeypatch) -> None:
+    monkeypatch.setattr("homebase_cli.client.pairing_rejection_reason", lambda request: None)
+    monkeypatch.setattr("homebase_cli.client.pair_controller", lambda request: True)
+    monkeypatch.setattr(
+        "homebase_cli.client.local_discovery",
+        lambda: SimpleNamespace(
+            node_id="abc123",
+            node_name="workstation",
+            hostname="DESKTOP-SB",
+            platform="Windows 11",
+            version="0.1.0",
+            description="daily workstation",
+        ),
+    )
+    body = json.dumps(
+        {
+            "controller_id": "control",
+            "code": "12345678",
+            "hostname": "control",
+            "address": "192.168.219.107",
+        }
+    ).encode("utf-8")
+    handler_type = make_handler()
+    handler = handler_type.__new__(handler_type)
+    handler.path = PAIR_PATH
+    handler.headers = {"Content-Length": str(len(body)), "Content-Type": "application/json"}
+    handler.rfile = io.BytesIO(body)
+    captured: dict[str, object] = {}
+    handler._send_json = lambda payload, status=200: captured.update(payload=payload, status=status)
+    handler.send_error = lambda status, message: captured.update(error=(status, message))
+    handler.do_POST()
+    assert captured["status"] == 200
+    payload = captured["payload"]
+    assert payload["node_name"] == "workstation"
     assert payload["open_ports"] == []
     assert payload["service_records"] == []
 
@@ -266,7 +369,7 @@ def test_detect_endpoint_records_uses_windows_powershell(monkeypatch) -> None:
     )
     monkeypatch.setattr("homebase_cli.client._interface_addresses", lambda: {})
     endpoints = detect_endpoint_records()
-    assert endpoints == ((8428, "python", "python", 4321),)
+    assert endpoints == ((8428, "homebase", "python", 4321),)
 
 
 def test_detect_service_records_uses_windows_services(monkeypatch) -> None:

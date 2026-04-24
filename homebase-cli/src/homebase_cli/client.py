@@ -740,44 +740,70 @@ def parse_profile_payload(payload: dict[str, Any]) -> ClientProfile:
     services = tuple(str(service).strip() for service in raw_services if str(service).strip())
     exposed_endpoints: list[tuple[int, str, str | None]] = []
     for item in raw_exposed_endpoints:
-        if not isinstance(item, dict):
+        if isinstance(item, dict):
+            try:
+                port_value = int(item.get("port"))
+            except (TypeError, ValueError):
+                continue
+            purpose = str(item.get("purpose", "")).strip() or describe_port(port_value)
+            owner_raw = item.get("owner")
+            owner = str(owner_raw).strip() if owner_raw not in (None, "") else None
+        elif isinstance(item, (list, tuple)) and len(item) >= 2:
+            try:
+                port_value = int(item[0])
+            except (TypeError, ValueError):
+                continue
+            purpose = str(item[1]).strip() or describe_port(port_value)
+            owner = str(item[2]).strip() if len(item) >= 3 and item[2] not in (None, "") else None
+        else:
             continue
-        try:
-            port_value = int(item.get("port"))
-        except (TypeError, ValueError):
-            continue
-        purpose = str(item.get("purpose", "")).strip() or describe_port(port_value)
-        owner_raw = item.get("owner")
-        owner = str(owner_raw).strip() if owner_raw not in (None, "") else None
         exposed_endpoints.append((port_value, purpose, owner))
     if not exposed_endpoints and open_ports:
         exposed_endpoints = [(port, describe_port(port), None) for port in open_ports]
     endpoint_records: list[tuple[int, str, str | None, int | None]] = []
     for item in raw_endpoint_records:
-        if not isinstance(item, dict):
+        if isinstance(item, dict):
+            try:
+                port_value = int(item.get("port"))
+            except (TypeError, ValueError):
+                continue
+            purpose = str(item.get("purpose", "")).strip() or describe_port(port_value)
+            owner_raw = item.get("owner")
+            owner = str(owner_raw).strip() if owner_raw not in (None, "") else None
+            pid_raw = item.get("pid")
+            pid = int(pid_raw) if isinstance(pid_raw, int) or (isinstance(pid_raw, str) and str(pid_raw).isdigit()) else None
+        elif isinstance(item, (list, tuple)) and len(item) >= 2:
+            try:
+                port_value = int(item[0])
+            except (TypeError, ValueError):
+                continue
+            purpose = str(item[1]).strip() or describe_port(port_value)
+            owner = str(item[2]).strip() if len(item) >= 3 and item[2] not in (None, "") else None
+            pid_raw = item[3] if len(item) >= 4 else None
+            pid = int(pid_raw) if isinstance(pid_raw, int) or (isinstance(pid_raw, str) and str(pid_raw).isdigit()) else None
+        else:
             continue
-        try:
-            port_value = int(item.get("port"))
-        except (TypeError, ValueError):
-            continue
-        purpose = str(item.get("purpose", "")).strip() or describe_port(port_value)
-        owner_raw = item.get("owner")
-        owner = str(owner_raw).strip() if owner_raw not in (None, "") else None
-        pid_raw = item.get("pid")
-        pid = int(pid_raw) if isinstance(pid_raw, int) or (isinstance(pid_raw, str) and str(pid_raw).isdigit()) else None
         endpoint_records.append((port_value, purpose, owner, pid))
     if not endpoint_records and exposed_endpoints:
         endpoint_records = [(port, purpose, owner, None) for port, purpose, owner in exposed_endpoints]
     service_records: list[tuple[str, str, int | None, str, str]] = []
     for item in raw_service_records:
-        if not isinstance(item, dict):
+        if isinstance(item, dict):
+            name = str(item.get("name", "")).strip()
+            state = str(item.get("state", "")).strip() or "unknown"
+            kind = str(item.get("kind", "")).strip() or "service"
+            description = str(item.get("description", "")).strip()
+            pid_raw = item.get("pid")
+            pid = int(pid_raw) if isinstance(pid_raw, int) or (isinstance(pid_raw, str) and str(pid_raw).isdigit()) else None
+        elif isinstance(item, (list, tuple)) and len(item) >= 2:
+            name = str(item[0]).strip()
+            state = str(item[1]).strip() or "unknown"
+            pid_raw = item[2] if len(item) >= 3 else None
+            pid = int(pid_raw) if isinstance(pid_raw, int) or (isinstance(pid_raw, str) and str(pid_raw).isdigit()) else None
+            kind = str(item[3]).strip() if len(item) >= 4 else "service"
+            description = str(item[4]).strip() if len(item) >= 5 else ""
+        else:
             continue
-        name = str(item.get("name", "")).strip()
-        state = str(item.get("state", "")).strip() or "unknown"
-        kind = str(item.get("kind", "")).strip() or "service"
-        description = str(item.get("description", "")).strip()
-        pid_raw = item.get("pid")
-        pid = int(pid_raw) if isinstance(pid_raw, int) or (isinstance(pid_raw, str) and str(pid_raw).isdigit()) else None
         if name:
             service_records.append((name, state, pid, kind, description))
     if not service_records and services:
@@ -981,6 +1007,14 @@ def profile_payload() -> dict[str, Any]:
     """Return the current full profile payload."""
     profile = local_profile()
     payload = asdict(profile)
+    payload["exposed_endpoints"] = [
+        {
+            "port": port,
+            "purpose": purpose,
+            "owner": owner,
+        }
+        for port, purpose, owner in profile.exposed_endpoints
+    ]
     payload["endpoint_records"] = [
         {
             "port": port,
@@ -1190,7 +1224,7 @@ def make_handler() -> type[BaseHTTPRequestHandler]:
                 if _require_paired_controller(self.headers) is None:
                     self._send_json({"error": "not paired"}, status=HTTPStatus.FORBIDDEN)
                     return
-                self._send_json(paired_profile_payload())
+                self._send_json(profile_payload())
                 return
             if path == PACKAGE_STATUS_PATH:
                 if _require_paired_controller(self.headers) is None:
@@ -1232,7 +1266,7 @@ def make_handler() -> type[BaseHTTPRequestHandler]:
                 if not pair_controller(request):
                     self._send_json({"error": "pairing failed"}, status=HTTPStatus.FORBIDDEN)
                     return
-                self._send_json(profile_payload())
+                self._send_json(paired_profile_payload())
                 return
             if path in {SERVICE_START_PATH, SERVICE_STOP_PATH}:
                 if _require_paired_controller(self.headers) is None:
