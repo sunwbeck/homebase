@@ -264,12 +264,25 @@ def _run_powershell(script: str) -> subprocess.CompletedProcess[str] | None:
     executable = _powershell_binary()
     if executable is None:
         return None
+    wrapped_script = (
+        "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; "
+        "$OutputEncoding = [System.Text.Encoding]::UTF8; "
+        + script
+    )
     try:
-        return subprocess.run(
-            [executable, "-NoProfile", "-NonInteractive", "-Command", script],
+        result = subprocess.run(
+            [executable, "-NoProfile", "-NonInteractive", "-Command", wrapped_script],
             check=False,
             capture_output=True,
-            text=True,
+            text=False,
+        )
+        stdout = result.stdout.decode("utf-8", errors="replace") if isinstance(result.stdout, bytes) else str(result.stdout or "")
+        stderr = result.stderr.decode("utf-8", errors="replace") if isinstance(result.stderr, bytes) else str(result.stderr or "")
+        return subprocess.CompletedProcess(
+            args=result.args,
+            returncode=result.returncode,
+            stdout=stdout,
+            stderr=stderr,
         )
     except OSError:
         return None
@@ -356,9 +369,9 @@ def _interface_addresses() -> dict[str, str]:
             r"Where-Object { $_.IPAddress -and $_.IPAddress -ne '127.0.0.1' -and $_.IPAddress -ne '::1' } | "
             r"Select-Object IPAddress,InterfaceAlias | ConvertTo-Json -Compress"
         )
-        if proc is not None and proc.returncode == 0 and proc.stdout.strip():
+        if proc is not None and proc.returncode == 0 and (proc.stdout or "").strip():
             try:
-                payload = json.loads(proc.stdout)
+                payload = json.loads(proc.stdout or "")
             except json.JSONDecodeError:
                 payload = []
             if isinstance(payload, dict):

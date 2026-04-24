@@ -1,6 +1,7 @@
 from datetime import UTC, datetime, timedelta
 import json
 from pathlib import Path
+import subprocess
 from types import SimpleNamespace
 
 from homebase_cli.client import (
@@ -76,6 +77,31 @@ def test_paired_profile_payload_is_lightweight(monkeypatch) -> None:
     assert payload["node_id"] == "abc123"
     assert payload["open_ports"] == []
     assert payload["service_records"] == []
+
+
+def test_run_powershell_decodes_utf8_bytes(monkeypatch) -> None:
+    monkeypatch.setattr("homebase_cli.client._powershell_binary", lambda: "powershell.exe")
+    monkeypatch.setattr(
+        "homebase_cli.client.subprocess.run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(
+            args=args[0],
+            returncode=0,
+            stdout='[{"IPAddress":"192.168.0.10","InterfaceAlias":"Wi-Fi"}]'.encode("utf-8"),
+            stderr=b"",
+        ),
+    )
+    result = __import__("homebase_cli.client", fromlist=["_run_powershell"])._run_powershell("test")
+    assert result is not None
+    assert result.stdout == '[{"IPAddress":"192.168.0.10","InterfaceAlias":"Wi-Fi"}]'
+
+
+def test_interface_addresses_handles_empty_stdout(monkeypatch) -> None:
+    monkeypatch.setattr("homebase_cli.client.platform_module.system", lambda: "Windows")
+    monkeypatch.setattr(
+        "homebase_cli.client._run_powershell",
+        lambda script: subprocess.CompletedProcess(args=["powershell"], returncode=0, stdout="", stderr=""),
+    )
+    assert __import__("homebase_cli.client", fromlist=["_interface_addresses"])._interface_addresses() == {}
 
 
 def test_parse_pair_request_requires_8_digits() -> None:
