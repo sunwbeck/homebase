@@ -180,11 +180,15 @@ def _node_label(node_name: str) -> str:
     return node_name
 
 
-def _node_service_state(node_name: str) -> str:
-    """Return the local background-service state when known."""
+def _node_client_state(node_name: str, snapshot: dict[str, object]) -> str:
+    """Return one short client-runtime state for status tables."""
     current_name = _current_node_name()
     if current_name and current_name == node_name:
         return "running" if connect_server_running() is not None else "stopped"
+    if snapshot.get("profile_reachable"):
+        return "reachable"
+    if snapshot.get("configured_client"):
+        return "no response"
     return ""
 
 
@@ -340,6 +344,8 @@ def _node_runtime_snapshot(node):
         "endpoints": endpoints,
         "endpoint_records": endpoint_records,
         "is_local": is_local,
+        "profile_reachable": profile is not None,
+        "configured_client": bool(node.address and node.client_port),
     }
 
 
@@ -825,7 +831,7 @@ def _print_registered_overview() -> None:
     table.add_column("Address")
     table.add_column("Hostname")
     table.add_column("OS")
-    table.add_column("Service")
+    table.add_column("Client")
     table.add_column("Exposure")
     table.add_column("Groups")
     if not nodes:
@@ -839,7 +845,7 @@ def _print_registered_overview() -> None:
             snapshot["address"],
             snapshot["hostname"],
             snapshot["platform"],
-            _node_service_state(node.name),
+            _node_client_state(node.name, snapshot),
             _format_exposure_summary(snapshot["endpoints"]),
             ", ".join(node.role_groups) if node.role_groups else "",
         )
@@ -859,7 +865,7 @@ def _print_managed_overview() -> None:
     table.add_column("Address")
     table.add_column("Hostname")
     table.add_column("OS")
-    table.add_column("Service")
+    table.add_column("Client")
     table.add_column("Exposure")
     table.add_row(
         f"{local_name} (local)",

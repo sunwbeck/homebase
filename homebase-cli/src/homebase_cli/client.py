@@ -351,11 +351,14 @@ def detect_open_ports() -> tuple[int, ...]:
 
 def describe_port(port: int, owner: str | None = None) -> str:
     """Return one generic label for a listening port without hardcoded service names."""
+    normalized_owner = (owner or "").strip()
+    normalized_owner_lower = normalized_owner.lower()
+    if port == DEFAULT_CLIENT_PORT and normalized_owner_lower in {"python", "python3", "python.exe", "python3.exe", "homebase", "hb"}:
+        return "homebase"
     try:
         return socket.getservbyport(port, "tcp")
     except OSError:
         pass
-    normalized_owner = (owner or "").strip()
     if normalized_owner.endswith(".service"):
         normalized_owner = normalized_owner.removesuffix(".service")
     return normalized_owner or str(port)
