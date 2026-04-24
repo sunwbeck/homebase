@@ -13,6 +13,7 @@ from homebase_cli.packaging import (
     github_versions,
     install_command,
     load_install_state,
+    prepare_windows_self_update,
     save_install_state,
     schedule_windows_self_update,
     should_defer_windows_self_update,
@@ -260,6 +261,22 @@ def test_schedule_windows_self_update_spawns_helper(tmp_path: Path, monkeypatch)
     assert "wait_for_pid = 1234" in helper_script.read_text(encoding="utf-8")
     result_payload = json.loads(result_path.read_text(encoding="utf-8"))
     assert result_payload["status"] == "scheduled"
+
+
+def test_prepare_windows_self_update_uses_external_python(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr("homebase_cli.packaging.platform.system", lambda: "Windows")
+    monkeypatch.setattr("homebase_cli.packaging.Path.home", lambda: tmp_path)
+    monkeypatch.setattr("homebase_cli.packaging.sys.executable", str(tmp_path / "venv" / "Scripts" / "python.exe"))
+    monkeypatch.setattr("homebase_cli.packaging.shutil.which", lambda name: r"C:\Windows\py.exe" if name == "py" else None)
+
+    command, helper_path = prepare_windows_self_update("main")
+
+    assert command[:2] == [r"C:\Windows\py.exe", "-3"]
+    assert command[2] == str(helper_path)
+    assert helper_path.exists()
+    helper_source = helper_path.read_text(encoding="utf-8")
+    assert "install_github_ref" in helper_source
+    assert "Updating Windows local installation..." in helper_source
 
 
 def test_wait_for_windows_self_update_returns_done_payload(tmp_path: Path) -> None:

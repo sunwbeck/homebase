@@ -148,6 +148,59 @@ def _windows_helper_python_command(target_interpreter: str) -> list[str] | None:
     return None
 
 
+def prepare_windows_self_update(
+    ref: str,
+    *,
+    repo_url: str = DEFAULT_REPO_URL,
+    python_bin: str | None = None,
+    summary: str | None = None,
+) -> tuple[list[str], Path]:
+    """Prepare one foreground Windows self-update helper command."""
+    interpreter = python_bin if python_bin is not None else sys.executable
+    helper_command = _windows_helper_python_command(interpreter)
+    if helper_command is None:
+        raise RuntimeError("could not find an external Python interpreter for Windows self-update")
+    helper_dir = Path.home() / ".local" / "share" / "homebase-cli" / "run"
+    helper_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    helper_path = helper_dir / f"self-update-foreground-{stamp}.py"
+    package_root = Path(__file__).resolve().parent.parent
+    helper_source = textwrap.dedent(
+        f"""
+        import sys
+        sys.path.insert(0, {str(package_root)!r})
+        from homebase_cli.packaging import PackageOperationError, install_github_ref  # noqa: E402
+
+        def stage(step, total, label):
+            print(f"[{{step}}/{{total}}] {{label}}", flush=True)
+
+        print("Updating Windows local installation...", flush=True)
+        try:
+            _, status = install_github_ref(
+                {ref!r},
+                repo_url={repo_url!r},
+                python_bin={interpreter!r},
+                summary={summary!r},
+                on_stage=stage,
+            )
+        except PackageOperationError as exc:
+            print("Package install failed.", flush=True)
+            print(f"Log: {{exc.log_path}}", flush=True)
+            raise SystemExit(1)
+        except Exception as exc:
+            print(f"Update failed: {{exc}}", flush=True)
+            raise SystemExit(1)
+
+        print(f"Installed version: {{status.installed_version or 'unknown'}}", flush=True)
+        print(f"Requested ref: {{status.requested_ref}}", flush=True)
+        if status.resolved_ref:
+            print(f"Resolved commit: {{status.resolved_ref}}", flush=True)
+        """
+    ).strip() + "\n"
+    helper_path.write_text(helper_source, encoding="utf-8")
+    return [*helper_command, str(helper_path)], helper_path
+
+
 def schedule_windows_self_update(
     ref: str,
     *,

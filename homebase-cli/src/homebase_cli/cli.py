@@ -58,6 +58,7 @@ from homebase_cli.packaging import (
     install_github_ref,
     latest_github_version,
     load_install_state,
+    prepare_windows_self_update,
     should_defer_windows_self_update,
 )
 from homebase_cli.registry import (
@@ -2346,20 +2347,19 @@ def _run_install_flow(
     summary: str | None,
 ) -> None:
     if should_defer_windows_self_update(python_bin):
-        console.print("[red]Windows local self-update is not supported through `homebase package` yet.[/red]")
-        console.print("Run this PowerShell command instead:")
-        console.print(
-            f'  irm https://raw.githubusercontent.com/sunwbeck/homebase/main/scripts/install-homebase.ps1 | iex'
-            if repo_url == DEFAULT_REPO_URL and ref == "main"
-            else f'  $py = "$HOME\\.local\\share\\homebase-cli\\.venv\\Scripts\\python.exe"; '
-                 f'$tmp = Join-Path $env:TEMP ("homebase-install-" + [guid]::NewGuid().ToString("N")); '
-                 f'New-Item -ItemType Directory -Force -Path $tmp | Out-Null; '
-                 f'$zip = Join-Path $tmp "homebase.zip"; '
-                 f'Invoke-WebRequest -Uri "{repo_url.removesuffix(".git")}/archive/{ref}.zip" -OutFile $zip; '
-                 f'Expand-Archive -LiteralPath $zip -DestinationPath $tmp -Force; '
-                 f'& $py -m pip install --upgrade --force-reinstall --no-cache-dir (Join-Path $tmp "homebase-{ref}\\homebase-cli")'
-        )
-        raise typer.Exit(code=1)
+        try:
+            helper_command, helper_path = prepare_windows_self_update(
+                ref,
+                repo_url=repo_url,
+                python_bin=python_bin,
+                summary=summary,
+            )
+        except RuntimeError as exc:
+            console.print(f"[red]Windows self-update setup failed.[/red] {exc}")
+            raise typer.Exit(code=1)
+        console.print(f"Re-running update through external Python helper: {helper_path}")
+        console.file.flush()
+        os.execv(helper_command[0], helper_command)
     local_name = _current_node_name() or "local"
     node_logs = {local_name: []}
     stage_state = {local_name: (1, 6, f"resolving target {ref}", "running")}
