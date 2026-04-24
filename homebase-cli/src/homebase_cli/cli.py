@@ -1551,6 +1551,19 @@ def _run_controller_service_forever() -> None:
         time.sleep(3600)
 
 
+def _background_process_kwargs() -> dict[str, object]:
+    """Return platform-appropriate Popen kwargs for detached background work."""
+    kwargs: dict[str, object] = {}
+    if os.name == "nt":
+        detached_process = int(getattr(subprocess, "DETACHED_PROCESS", 0))
+        create_new_process_group = int(getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
+        create_no_window = int(getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        kwargs["creationflags"] = detached_process | create_new_process_group | create_no_window
+    else:
+        kwargs["start_new_session"] = True
+    return kwargs
+
+
 def _start_daemon_background(*, host: str, port: int, current_role: str) -> None:
     """Start the local daemon in the background and print the result."""
     CONNECT_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -1573,8 +1586,8 @@ def _start_daemon_background(*, host: str, port: int, current_role: str) -> None
         stdout=log_handle,
         stderr=log_handle,
         stdin=subprocess.DEVNULL,
-        start_new_session=True,
         env=env,
+        **_background_process_kwargs(),
     )
     log_handle.close()
     save_connect_runtime(

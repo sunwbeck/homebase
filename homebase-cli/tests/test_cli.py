@@ -599,7 +599,7 @@ def test_status_shows_local_node(monkeypatch) -> None:
 def test_managed_status_shows_self_and_paired_controllers(monkeypatch) -> None:
     runner = CliRunner()
     with runner.isolated_filesystem():
-        env = {"HOMEBASE_SETTINGS_PATH": "settings.toml", "COLUMNS": "240"}
+        env = {"HOMEBASE_SETTINGS_PATH": "settings.toml", "HOMEBASE_REGISTRY_PATH": "nodes.toml", "COLUMNS": "240"}
         Path("settings.toml").write_text('role = "managed"\nnode_name = "app"\n', encoding="utf-8")
         app = load_app(monkeypatch, "settings.toml")
         monkeypatch.setattr(
@@ -714,6 +714,23 @@ def test_daemon_restart_starts_when_not_running(monkeypatch) -> None:
         assert result.exit_code == 0
         assert started == [("0.0.0.0", 8428, "controller")]
         assert "daemon was not running; starting a new instance" in result.stdout
+
+
+def test_background_process_kwargs_use_windows_detach_flags(monkeypatch) -> None:
+    module = load_module(monkeypatch)
+    monkeypatch.setattr("homebase_cli.cli.os.name", "nt")
+    monkeypatch.setattr("homebase_cli.cli.subprocess.DETACHED_PROCESS", 0x00000008, raising=False)
+    monkeypatch.setattr("homebase_cli.cli.subprocess.CREATE_NEW_PROCESS_GROUP", 0x00000200, raising=False)
+    monkeypatch.setattr("homebase_cli.cli.subprocess.CREATE_NO_WINDOW", 0x08000000, raising=False)
+    kwargs = module._background_process_kwargs()
+    assert kwargs == {"creationflags": 0x08000208}
+
+
+def test_background_process_kwargs_use_new_session_on_posix(monkeypatch) -> None:
+    module = load_module(monkeypatch)
+    monkeypatch.setattr("homebase_cli.cli.os.name", "posix")
+    kwargs = module._background_process_kwargs()
+    assert kwargs == {"start_new_session": True}
 
 
 def test_connect_code_always_refreshes_and_shows_expiry(monkeypatch) -> None:
