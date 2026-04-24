@@ -319,7 +319,7 @@ def _node_runtime_snapshot(node):
             profile = fetch_profile(node.address, port=node.client_port)
         except Exception:
             profile = None
-    endpoints = detect_exposed_endpoints() if profile is not None else (
+    endpoints = tuple(profile.exposed_endpoints) if profile is not None else (
         node.exposed_endpoints or tuple((port, describe_port(port), None) for port in node.open_ports)
     )
     endpoint_records = tuple(profile.endpoint_records) if profile is not None else (
